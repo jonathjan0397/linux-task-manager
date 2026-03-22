@@ -15,29 +15,30 @@ A modern, terminal-based task manager for Linux systems, built with Python and t
 - **System Log Viewer**: Interactive viewer for system logs (journalctl, dmesg, syslog, etc.).
 - **Cross-Platform Mock Mode**: Includes a built-in simulator (`--mock`) for testing and development on Windows or macOS.
 
-## Installation
+## Installation & Quick Start
 
-### Prerequisites
+To run the application, simply use the automated runner. It will automatically handle the virtual environment and dependencies for you:
 
-- **Python 3.8+**
-- **pip** (Python package manager)
+**Linux / macOS / WSL:**
+```bash
+chmod +x run.sh
+./run.sh
+```
 
-### Setup
+**Windows (PowerShell):**
+```powershell
+# First time setup
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/jonathjan0397/linux-task-manager.git
-   cd linux-task-manager
-   ```
-
-2. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+# Run
+python app.py --mock
+```
 
 ## Usage
 
-Run the utility directly from your terminal:
+Run the utility directly from your terminal (if dependencies are already installed):
 ```bash
 python app.py
 ```
