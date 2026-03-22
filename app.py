@@ -1,3 +1,12 @@
+# /// script
+# dependencies = [
+#     "textual",
+#     "psutil",
+#     "pynvml",
+#     "rich",
+# ]
+# ///
+
 import sys
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Static, ProgressBar, Sparkline, Label, DataTable, TabbedContent, TabPane, Digits, ListView, ListItem
