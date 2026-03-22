@@ -267,12 +267,41 @@ class ProcessWidget(Static):
                 f"{proc['mem']:.1f}%"
             )
 
+class AboutWidget(Static):
+    def compose(self) -> ComposeResult:
+        yield Label("About PyTask: Linux Task Manager")
+        yield Static(
+            "\n[bold cyan]PyTask[/bold cyan] is a modern, terminal-based system monitor.\n\n"
+            "Built with [bold]Python[/bold] and the [bold]Textual[/bold] framework.\n\n"
+            "Features:\n"
+            " - Real-time CPU & Memory monitoring\n"
+            " - Network traffic & active connections\n"
+            " - Disk I/O & S.M.A.R.T. health data\n"
+            " - GPU performance tracking\n"
+            " - Process management\n\n"
+            "Created for the [bold green]Linux[/bold green] community.\n"
+            "Version: [bold yellow]1.1.0[/bold yellow]\n\n"
+            "Shortcut Keys:\n"
+            " [bold yellow]1-9[/bold yellow]: Switch Tabs\n"
+            " [bold yellow]t / T[/bold yellow]: Next / Previous Tab\n"
+            " [bold yellow]Esc / q[/bold yellow]: Exit App"
+        )
+
 class TaskManagerApp(App):
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("escape", "quit", "Exit"),
         ("t", "next_tab", "Next Tab"),
         ("shift+t", "previous_tab", "Prev Tab"),
+        ("1", "switch_tab(0)", "Dashboard"),
+        ("2", "switch_tab(1)", "CPU"),
+        ("3", "switch_tab(2)", "Processes"),
+        ("4", "switch_tab(3)", "Memory"),
+        ("5", "switch_tab(4)", "Health"),
+        ("6", "switch_tab(5)", "Network"),
+        ("7", "switch_tab(6)", "Disk"),
+        ("8", "switch_tab(7)", "Connections"),
+        ("9", "switch_tab(9)", "About"),
     ]
     CSS = """
     Screen {
@@ -288,6 +317,18 @@ class TaskManagerApp(App):
         background: black;
         color: #00FF00;
         border-top: solid white;
+        height: 1;
+        dock: bottom;
+    }
+    Footer > .footer--key {
+        color: #00FF00;
+        background: black;
+    }
+    Footer > .footer--description {
+        color: #00FF00;
+    }
+    Footer > .footer--highlight {
+        background: #004400;
     }
     #system-info-bar {
         height: 3;
@@ -318,6 +359,7 @@ class TaskManagerApp(App):
         background: black;
         border: solid white;
         margin: 1;
+        height: 100%;
     }
     Label {
         color: #00FF00;
@@ -398,38 +440,48 @@ class TaskManagerApp(App):
         self.monitor = Monitor(mock=mock)
 
     def action_next_tab(self) -> None:
-        self.query_one(TabbedContent).active = self.query_one(TabbedContent).active_tab
+        tc = self.query_one(TabbedContent)
+        tc.active = tc.active_tab
+
+    def action_switch_tab(self, index: int) -> None:
+        tc = self.query_one(TabbedContent)
+        # Use child panes to determine tab order
+        panes = list(tc.query(TabPane))
+        if index < len(panes):
+            tc.active = panes[index].id
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with TabbedContent():
-            with TabPane("Dashboard"):
+            with TabPane("Dashboard", id="tab-dash"):
                 self.dash_widget = DashboardWidget()
                 yield self.dash_widget
-            with TabPane("CPU"):
+            with TabPane("CPU", id="tab-cpu"):
                 self.cpu_widget = CPUWidget()
                 yield self.cpu_widget
-            with TabPane("Processes"):
+            with TabPane("Processes", id="tab-proc"):
                 self.proc_widget = ProcessWidget()
                 yield self.proc_widget
-            with TabPane("Memory"):
+            with TabPane("Memory", id="tab-mem"):
                 self.mem_widget = MemoryWidget()
                 yield self.mem_widget
-            with TabPane("Health"):
+            with TabPane("Health", id="tab-health"):
                 self.health_widget = DiskHealthWidget()
                 yield self.health_widget
-            with TabPane("Network"):
+            with TabPane("Network", id="tab-net"):
                 self.net_widget = NetworkWidget()
                 yield self.net_widget
-            with TabPane("Disk"):
+            with TabPane("Disk", id="tab-disk"):
                 self.disk_widget = DiskWidget()
                 yield self.disk_widget
-            with TabPane("Connections"):
+            with TabPane("Connections", id="tab-conn"):
                 self.conn_widget = ConnectionsWidget()
                 yield self.conn_widget
-            with TabPane("GPU"):
+            with TabPane("GPU", id="tab-gpu"):
                 self.gpu_widget = GPUWidget()
                 yield self.gpu_widget
+            with TabPane("About", id="tab-about"):
+                yield AboutWidget()
         yield Footer()
 
     def on_mount(self) -> None:
