@@ -88,17 +88,68 @@ class Monitor:
 
         import platform
         import datetime
-        
+
         os_name = platform.platform(terse=True)
         boot_time = datetime.datetime.fromtimestamp(psutil.boot_time())
         uptime = datetime.datetime.now() - boot_time
-        
+
         days = uptime.days
         hours, remainder = divmod(uptime.seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
         uptime_str = f"{days}d, {hours:02d}:{minutes:02d}:{seconds:02d}"
-        
+
         return os_name, uptime_str
+
+    def get_available_logs(self):
+        """Detects available log sources on the system."""
+        if self.mock:
+            return ["journalctl", "dmesg", "syslog", "auth.log"]
+
+        import shutil
+        import os
+        sources = []
+        if shutil.which("journalctl"): sources.append("journalctl")
+        if shutil.which("dmesg"): sources.append("dmesg")
+
+        standard_files = ["/var/log/syslog", "/var/log/messages", "/var/log/auth.log", "/var/log/kern.log"]
+        for f in standard_files:
+            if os.path.exists(f):
+                sources.append(os.path.basename(f))
+
+        return sources
+
+    def get_log_content(self, source, limit=50):
+        """Fetches the last N lines of a specified log source."""
+        if self.mock:
+            mock_logs = {
+                "journalctl": [f"Mar 22 18:00:01 host systemd[1]: Started Session {i} of user jc." for i in range(100, 100+limit)],
+                "dmesg": [f"[{i*1.5:.6f}] pci 0000:00:1f.3: Intel Corporation Device 7a50" for i in range(limit)],
+                "syslog": [f"Mar 22 18:05:{i:02d} host CRON[1234]: (root) CMD (command)" for i in range(limit)],
+                "auth.log": [f"Mar 22 18:10:00 host sshd[5678]: Accepted password for user from 192.168.1.{i}" for i in range(limit)]
+            }
+            return mock_logs.get(source, ["No mock data for this source."])
+
+        import subprocess
+        try:
+            if source == "journalctl":
+                res = subprocess.run(["journalctl", "-n", str(limit), "--no-pager"], capture_output=True, text=True)
+                return res.stdout.splitlines()
+            elif source == "dmesg":
+                res = subprocess.run(["dmesg", "--tail", str(limit)], capture_output=True, text=True)
+                if res.returncode != 0: # Some systems don't support --tail
+                    res = subprocess.run(["dmesg"], capture_output=True, text=True)
+                    return res.stdout.splitlines()[-limit:]
+                return res.stdout.splitlines()
+            else:
+                # Standard file
+                path = f"/var/log/{source}"
+                if os.path.exists(path):
+                    res = subprocess.run(["tail", "-n", str(limit), path], capture_output=True, text=True)
+                    return res.stdout.splitlines()
+        except Exception as e:
+            return [f"Error reading log: {e}"]
+
+        return ["Log source not found."]
 
     def get_disk_health(self):
         """Returns list of dicts with Disk S.M.A.R.T / Health info."""

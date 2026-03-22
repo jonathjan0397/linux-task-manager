@@ -1,6 +1,6 @@
 import sys
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Static, ProgressBar, Sparkline, Label, DataTable, TabbedContent, TabPane, Digits
+from textual.widgets import Header, Footer, Static, ProgressBar, Sparkline, Label, DataTable, TabbedContent, TabPane, Digits, ListView, ListItem
 from textual.containers import Container, Vertical, Horizontal, Grid
 from monitor import Monitor
 
@@ -267,6 +267,38 @@ class ProcessWidget(Static):
                 f"{proc['mem']:.1f}%"
             )
 
+class LogViewerWidget(Static):
+    def __init__(self, monitor):
+        super().__init__()
+        self.monitor = monitor
+        self.sources = []
+
+    def compose(self) -> ComposeResult:
+        with Horizontal():
+            with Vertical(id="log-sidebar"):
+                yield Label("Sources")
+                self.source_list = ListView(id="log-sources")
+                yield self.source_list
+            with Vertical(id="log-content-area"):
+                yield Label("Log Entries")
+                self.log_text = Static("Select a log source...", id="log-text")
+                yield self.log_text
+
+    def on_mount(self) -> None:
+        self.refresh_sources()
+
+    def refresh_sources(self) -> None:
+        self.sources = self.monitor.get_available_logs()
+        self.source_list.clear()
+        for s in self.sources:
+            self.source_list.append(ListItem(Label(s), id=f"source-{s}"))
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        source_id = event.item.id
+        source = source_id.replace("source-", "")
+        content = self.monitor.get_log_content(source)
+        self.log_text.update("\n".join(content))
+
 class AboutWidget(Static):
     def compose(self) -> ComposeResult:
         yield Label("About PyTask: Linux Task Manager")
@@ -278,11 +310,12 @@ class AboutWidget(Static):
             " - Network traffic & active connections\n"
             " - Disk I/O & S.M.A.R.T. health data\n"
             " - GPU performance tracking\n"
-            " - Process management\n\n"
+            " - Process management\n"
+            " - System log viewer\n\n"
             "Created for the [bold green]Linux[/bold green] community.\n"
-            "Version: [bold yellow]1.1.0[/bold yellow]\n\n"
+            "Version: [bold yellow]1.2.0[/bold yellow]\n\n"
             "Shortcut Keys:\n"
-            " [bold yellow]1-9[/bold yellow]: Switch Tabs\n"
+            " [bold yellow]1-9, 0[/bold yellow]: Switch Tabs\n"
             " [bold yellow]t / T[/bold yellow]: Next / Previous Tab\n"
             " [bold yellow]Esc / q[/bold yellow]: Exit App"
         )
@@ -298,10 +331,11 @@ class TaskManagerApp(App):
         ("3", "switch_tab(2)", "Proc"),
         ("4", "switch_tab(3)", "Mem"),
         ("5", "switch_tab(4)", "Health"),
-        ("6", "switch_tab(5)", "Net"),
-        ("7", "switch_tab(6)", "Disk"),
-        ("8", "switch_tab(7)", "Conn"),
-        ("9", "switch_tab(9)", "About"),
+        ("6", "switch_tab(5)", "Logs"),
+        ("7", "switch_tab(6)", "Net"),
+        ("8", "switch_tab(7)", "Disk"),
+        ("9", "switch_tab(8)", "Conn"),
+        ("0", "switch_tab(10)", "About"),
     ]
     CSS = """
     Screen {
@@ -431,6 +465,31 @@ class TaskManagerApp(App):
     DataTable > .datatable--cursor {
         background: #004400;
     }
+    #log-sidebar {
+        width: 25;
+        border-right: solid white;
+        padding: 1;
+    }
+    #log-sources {
+        background: black;
+    }
+    ListItem {
+        padding: 0 1;
+    }
+    ListItem:hover {
+        background: #002200;
+    }
+    ListItem.--highlight {
+        background: #004400;
+        color: #00FF00;
+    }
+    #log-content-area {
+        padding: 1;
+    }
+    #log-text {
+        height: 100%;
+        overflow-y: scroll;
+    }
     """
 
     def __init__(self, mock=False):
@@ -443,8 +502,6 @@ class TaskManagerApp(App):
 
     def action_switch_tab(self, index: int) -> None:
         tc = self.query_one(TabbedContent)
-        # TabPane ids are automatically prefixed with "tab-" by TabbedContent
-        # We access the internal panes to find the right ID
         panes = list(tc.query(TabPane))
         if index < len(panes):
             tc.active = panes[index].id
@@ -467,6 +524,8 @@ class TaskManagerApp(App):
             with TabPane("Health", id="tab-health"):
                 self.health_widget = DiskHealthWidget()
                 yield self.health_widget
+            with TabPane("Logs", id="tab-logs"):
+                yield LogViewerWidget(self.monitor)
             with TabPane("Network", id="tab-net"):
                 self.net_widget = NetworkWidget()
                 yield self.net_widget
