@@ -230,11 +230,18 @@ class DiskHealthWidget(Static):
     def compose(self) -> ComposeResult:
         yield Label("Disk S.M.A.R.T. Health Assessment")
         self.table = DataTable()
-        self.table.add_columns(" ", "Device", "Model", "Status", "Temp", "Power On", "Reallocated")
         yield self.table
+
+    def on_mount(self) -> None:
+        self.table.add_columns(" ", "Device", "Model", "Status", "Temp", "Power On", "Reallocated")
 
     def update_stats(self, disks):
         self.table.clear()
+        
+        # Ensure columns exist (safety check)
+        if not self.table.columns:
+            self.table.add_columns(" ", "Device", "Model", "Status", "Temp", "Power On", "Reallocated")
+
         if not disks:
             self.table.add_row("", "No disks detected.", "-", "-", "-", "-", "-")
             return
