@@ -138,16 +138,18 @@ class ConnectionsWidget(Static):
     def update_stats(self, connections):
         self.table.clear()
         for conn in connections:
-            status_style = ""
-            if conn['status'] == 'ESTABLISHED':
-                status_style = "[green]"
-            elif conn['status'] == 'LISTEN':
-                status_style = "[yellow]"
+            status = conn['status']
+            if status == 'ESTABLISHED':
+                status_display = f"[green]{status}[/]"
+            elif status == 'LISTEN':
+                status_display = f"[yellow]{status}[/]"
+            else:
+                status_display = status
             
             self.table.add_row(
                 conn['laddr'],
                 conn['raddr'],
-                f"{status_style}{conn['status']}[/]",
+                status_display,
                 str(conn['pid'])
             )
 
@@ -232,14 +234,18 @@ class ProcessWidget(Static):
     def update_stats(self, processes):
         self.table.clear()
         for proc in processes:
-            cpu_style = ""
-            if proc['cpu'] > 50: cpu_style = "[bold red]"
-            elif proc['cpu'] > 20: cpu_style = "[yellow]"
+            cpu = proc['cpu']
+            if cpu > 50:
+                cpu_display = f"[bold red]{cpu}%[/]"
+            elif cpu > 20:
+                cpu_display = f"[yellow]{cpu}%[/]"
+            else:
+                cpu_display = f"{cpu}%"
             
             self.table.add_row(
                 str(proc['pid']),
                 f"[bold]{proc['name']}[/]",
-                f"{cpu_style}{proc['cpu']}%[/]",
+                cpu_display,
                 f"{proc['mem']:.1f}%"
             )
 
