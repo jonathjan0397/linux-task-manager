@@ -81,6 +81,25 @@ class Monitor:
 
         return read_kbps, write_kbps
 
+    def get_system_info(self):
+        """Returns (os_name, uptime_str)."""
+        if self.mock:
+            return "Ubuntu 22.04.3 LTS (Mock)", "3 days, 14:22:05"
+
+        import platform
+        import datetime
+        
+        os_name = platform.platform(terse=True)
+        boot_time = datetime.datetime.fromtimestamp(psutil.boot_time())
+        uptime = datetime.datetime.now() - boot_time
+        
+        days = uptime.days
+        hours, remainder = divmod(uptime.seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        uptime_str = f"{days}d, {hours:02d}:{minutes:02d}:{seconds:02d}"
+        
+        return os_name, uptime_str
+
     def get_disk_health(self):
         """Returns list of dicts with Disk S.M.A.R.T / Health info."""
         if self.mock:
@@ -89,6 +108,7 @@ class Monitor:
                     "device": "/dev/nvme0n1",
                     "model": "Samsung SSD 980 PRO 1TB",
                     "status": "PASSED",
+                    "alert": False,
                     "temp": "32°C",
                     "power_on": "4,520 hours",
                     "reallocated": 0,
@@ -97,22 +117,20 @@ class Monitor:
                 {
                     "device": "/dev/sda",
                     "model": "Crucial CT500MX500SSD1",
-                    "status": "PASSED",
-                    "temp": "28°C",
+                    "status": "WARNING",
+                    "alert": True,
+                    "temp": "45°C",
                     "power_on": "12,150 hours",
-                    "reallocated": 2,
+                    "reallocated": 42,
                     "wear_level": "85%"
                 }
             ]
 
         disks = []
         try:
-            # We use smartctl -j (JSON output) which is standard in smartmontools 7.0+
-            # Note: This requires root or specific sudoers permissions
             import subprocess
             import json
 
-            # Get list of devices
             devices_proc = subprocess.run(['sudo', 'smartctl', '--scan-open', '-j'], capture_output=True, text=True)
             if devices_proc.returncode == 0:
                 scan_data = json.loads(devices_proc.stdout)
@@ -124,13 +142,11 @@ class Monitor:
                     if info_proc.returncode == 0:
                         data = json.loads(info_proc.stdout)
                         
-                        # Extract key metrics
-                        status = data.get('smart_status', {}).get('passed', False)
+                        status_passed = data.get('smart_status', {}).get('passed', False)
                         model = data.get('model_name', 'Unknown')
                         temp = data.get('temperature', {}).get('current', 'N/A')
                         power_on = data.get('power_on_time', {}).get('hours', 'N/A')
                         
-                        # Find reallocated sectors (ID 5 for SATA, or specific for NVMe)
                         reallocated = 0
                         for attr in data.get('ata_smart_attributes', {}).get('table', []):
                             if attr.get('id') == 5:
@@ -139,11 +155,12 @@ class Monitor:
                         disks.append({
                             "device": name,
                             "model": model,
-                            "status": "PASSED" if status else "FAILED",
+                            "status": "PASSED" if status_passed else "FAILED",
+                            "alert": not status_passed or reallocated > 0,
                             "temp": f"{temp}°C" if temp != 'N/A' else 'N/A',
                             "power_on": f"{power_on:,} hours" if power_on != 'N/A' else 'N/A',
                             "reallocated": reallocated,
-                            "wear_level": "N/A" # Harder to get generically without vendor specific tools
+                            "wear_level": "N/A"
                         })
         except Exception:
             pass

@@ -6,33 +6,45 @@ from monitor import Monitor
 
 class DashboardWidget(Static):
     def compose(self) -> ComposeResult:
-        with Grid(id="dashboard-grid"):
-            with Vertical(classes="dash-card"):
-                yield Label("Overall CPU")
-                self.cpu_digits = Digits("0%")
-                self.cpu_bar = ProgressBar(total=100, show_percentage=True)
-                yield self.cpu_digits
-                yield self.cpu_bar
+        with Vertical():
+            with Horizontal(id="system-info-bar"):
+                self.os_label = Label("OS: Loading...")
+                self.uptime_label = Label("Uptime: Loading...")
+                yield self.os_label
+                yield self.uptime_label
             
-            with Vertical(classes="dash-card"):
-                yield Label("Memory Usage")
-                self.mem_digits = Digits("0%")
-                self.mem_bar = ProgressBar(total=100, show_percentage=True)
-                self.mem_label = Label("0/0 GB")
-                yield self.mem_digits
-                yield self.mem_bar
-                yield self.mem_label
+            with Grid(id="dashboard-grid"):
+                with Vertical(classes="dash-card"):
+                    yield Label("Overall CPU")
+                    self.cpu_digits = Digits("0%")
+                    self.cpu_bar = ProgressBar(total=100, show_percentage=True)
+                    yield self.cpu_digits
+                    yield self.cpu_bar
+                
+                with Vertical(classes="dash-card"):
+                    yield Label("Memory Usage")
+                    self.mem_digits = Digits("0%")
+                    self.mem_bar = ProgressBar(total=100, show_percentage=True)
+                    self.mem_label = Label("0/0 GB")
+                    yield self.mem_digits
+                    yield self.mem_bar
+                    yield self.mem_label
 
-            with Vertical(classes="dash-card"):
-                yield Label("Network")
-                self.net_down = Label("Download: 0 KB/s")
-                self.net_up = Label("Upload: 0 KB/s")
-                self.net_spark = Sparkline(id="dash-net-spark")
-                yield self.net_down
-                yield self.net_up
-                yield self.net_spark
+                with Vertical(classes="dash-card"):
+                    yield Label("Network")
+                    self.net_down = Label("Download: 0 KB/s")
+                    self.net_up = Label("Upload: 0 KB/s")
+                    self.net_spark = Sparkline(id="dash-net-spark")
+                    yield self.net_down
+                    yield self.net_up
+                    yield self.net_spark
 
-    def update_stats(self, cpu_avg, mem_data, net_data):
+    def update_stats(self, cpu_avg, mem_data, net_data, sys_info):
+        # System Info
+        os_name, uptime = sys_info
+        self.os_label.update(f"OS: [bold cyan]{os_name}[/]")
+        self.uptime_label.update(f"Uptime: [bold yellow]{uptime}[/]")
+
         # CPU
         self.cpu_digits.update(f"{cpu_avg:.0f}%")
         self.cpu_bar.progress = cpu_avg
@@ -185,24 +197,30 @@ class DiskHealthWidget(Static):
     def compose(self) -> ComposeResult:
         yield Label("Disk S.M.A.R.T. Health Assessment")
         self.table = DataTable()
-        self.table.add_columns("Device", "Model", "Status", "Temp", "Power On", "Reallocated")
+        self.table.add_columns(" ", "Device", "Model", "Status", "Temp", "Power On", "Reallocated")
         yield self.table
 
     def update_stats(self, disks):
         self.table.clear()
         if not disks:
-            self.table.add_row("No disks detected or insufficient permissions (need sudo)", "-", "-", "-", "-", "-")
+            self.table.add_row("", "No disks detected or insufficient permissions (need sudo)", "-", "-", "-", "-", "-")
             return
 
         for disk in disks:
-            status_style = "[green]" if disk['status'] == "PASSED" else "[red]"
+            status_style = "[green]" if disk['status'] == "PASSED" else "[bold red]"
+            icon = "✅" if disk['status'] == "PASSED" else "⚠️"
+            if disk.get('alert'):
+                status_style = "[bold red]"
+                icon = "🚨"
+
             self.table.add_row(
+                icon,
                 disk['device'],
                 disk['model'],
                 f"{status_style}{disk['status']}[/]",
                 disk['temp'],
                 disk['power_on'],
-                str(disk['reallocated'])
+                f"[bold red]{disk['reallocated']}[/]" if disk['reallocated'] > 0 else str(disk['reallocated'])
             )
 
 class GPUWidget(Static):
@@ -253,6 +271,8 @@ class TaskManagerApp(App):
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("escape", "quit", "Exit"),
+        ("t", "next_tab", "Next Tab"),
+        ("shift+t", "previous_tab", "Prev Tab"),
     ]
     CSS = """
     Screen {
@@ -269,8 +289,19 @@ class TaskManagerApp(App):
         color: #00FF00;
         border-top: solid white;
     }
+    #system-info-bar {
+        height: 3;
+        border-bottom: solid white;
+        padding: 0 1;
+        background: #001100;
+        align: center middle;
+    }
+    #system-info-bar Label {
+        margin: 0 4;
+    }
     TabbedContent {
         background: black;
+        height: 100%;
     }
     Tabs {
         background: black;
@@ -285,6 +316,8 @@ class TaskManagerApp(App):
     TabPane {
         padding: 1 2;
         background: black;
+        border: solid white;
+        margin: 1;
     }
     Label {
         color: #00FF00;
@@ -364,6 +397,9 @@ class TaskManagerApp(App):
         super().__init__()
         self.monitor = Monitor(mock=mock)
 
+    def action_next_tab(self) -> None:
+        self.query_one(TabbedContent).active = self.query_one(TabbedContent).active_tab
+
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with TabbedContent():
@@ -409,10 +445,11 @@ class TaskManagerApp(App):
         proc_stats = self.monitor.get_process_list()
         conn_stats = self.monitor.get_network_connections()
         health_stats = self.monitor.get_disk_health()
+        sys_info = self.monitor.get_system_info()
 
         # Update Dashboard
         cpu_avg = sum(cpu_stats) / len(cpu_stats) if cpu_stats else 0
-        self.dash_widget.update_stats(cpu_avg, mem_stats, net_stats)
+        self.dash_widget.update_stats(cpu_avg, mem_stats, net_stats, sys_info)
 
         # Update Individual Widgets
         self.cpu_widget.update_stats(cpu_stats)
