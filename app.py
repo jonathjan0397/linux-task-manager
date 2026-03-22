@@ -1,25 +1,104 @@
 import sys
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Static, ProgressBar, Sparkline, Label, DataTable, TabbedContent, TabPane
-from textual.containers import Container, Vertical, Horizontal
+from textual.widgets import Header, Footer, Static, ProgressBar, Sparkline, Label, DataTable, TabbedContent, TabPane, Digits
+from textual.containers import Container, Vertical, Horizontal, Grid
 from monitor import Monitor
+
+class DashboardWidget(Static):
+    def compose(self) -> ComposeResult:
+        with Grid(id="dashboard-grid"):
+            with Vertical(classes="dash-card"):
+                yield Label("Overall CPU")
+                self.cpu_digits = Digits("0%")
+                self.cpu_bar = ProgressBar(total=100, show_percentage=True)
+                yield self.cpu_digits
+                yield self.cpu_bar
+            
+            with Vertical(classes="dash-card"):
+                yield Label("Memory Usage")
+                self.mem_digits = Digits("0%")
+                self.mem_bar = ProgressBar(total=100, show_percentage=True)
+                self.mem_label = Label("0/0 GB")
+                yield self.mem_digits
+                yield self.mem_bar
+                yield self.mem_label
+
+            with Vertical(classes="dash-card"):
+                yield Label("Network")
+                self.net_down = Label("Download: 0 KB/s")
+                self.net_up = Label("Upload: 0 KB/s")
+                self.net_spark = Sparkline(id="dash-net-spark")
+                yield self.net_down
+                yield self.net_up
+                yield self.net_spark
+
+    def update_stats(self, cpu_avg, mem_data, net_data):
+        # CPU
+        self.cpu_digits.update(f"{cpu_avg:.0f}%")
+        self.cpu_bar.progress = cpu_avg
+        
+        # Memory
+        percent, used, total = mem_data
+        self.mem_digits.update(f"{percent:.0f}%")
+        self.mem_bar.progress = percent
+        self.mem_label.update(f"{used:.1f} / {total:.1f} GB")
+
+        # Network
+        down, up = net_data
+        self.net_down.update(f"Download: [cyan]{down:.1f} KB/s[/cyan]")
+        self.net_up.update(f"Upload: [magenta]{up:.1f} KB/s[/magenta]")
+        if self.net_spark.data is None:
+            self.net_spark.data = []
+        self.net_spark.data = self.net_spark.data + [down + up]
 
 class CPUWidget(Static):
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label("CPU Cores Usage")
+            yield Label("Per-Core CPU Usage")
             self.bars = []
             for i in range(16): # Support up to 16 cores
-                bar = ProgressBar(total=100, show_percentage=True, id=f"cpu-{i}")
-                bar.display = False
-                self.bars.append(bar)
-                yield bar
+                with Horizontal(classes="core-row"):
+                    label = Label(f"Core {i:2d}", classes="core-label")
+                    bar = ProgressBar(total=100, show_percentage=True, id=f"cpu-{i}")
+                    bar.display = False
+                    label.display = False
+                    self.bars.append((label, bar))
+                    yield label
+                    yield bar
 
     def update_stats(self, stats):
         for i, val in enumerate(stats):
             if i < len(self.bars):
-                self.bars[i].display = True
-                self.bars[i].progress = val
+                label, bar = self.bars[i]
+                label.display = True
+                bar.display = True
+                bar.progress = val
+                # Dynamic styling based on usage
+                if val > 80:
+                    bar.styles.bar_foreground = "#f7768e"
+                elif val > 50:
+                    bar.styles.bar_foreground = "#e0af68"
+                else:
+                    bar.styles.bar_foreground = "#9ece6a"
+
+class MemoryWidget(Static):
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("Detailed Memory Stats")
+            self.main_bar = ProgressBar(total=100, show_percentage=True)
+            self.stats_label = Label("Loading...")
+            yield self.main_bar
+            yield self.stats_label
+            yield Label("\nMemory History")
+            self.history = Sparkline()
+            yield self.history
+
+    def update_stats(self, percent, used, total):
+        self.main_bar.progress = percent
+        self.stats_label.update(f"Used: [bold]{used:.2f} GB[/bold] | Total: [bold]{total:.2f} GB[/bold]")
+        if self.history.data is None:
+            self.history.data = []
+        self.history.data = self.history.data + [percent]
 
 class NetworkWidget(Static):
     def compose(self) -> ComposeResult:
@@ -46,8 +125,8 @@ class NetworkWidget(Static):
             self.upload_spark.data = []
         self.download_spark.data = self.download_spark.data + [down]
         self.upload_spark.data = self.upload_spark.data + [up]
-        self.download_label.update(f"{down:.1f} KB/s")
-        self.upload_label.update(f"{up:.1f} KB/s")
+        self.download_label.update(f"[cyan]{down:.1f} KB/s[/cyan]")
+        self.upload_label.update(f"[magenta]{up:.1f} KB/s[/magenta]")
 
 class ConnectionsWidget(Static):
     def compose(self) -> ComposeResult:
@@ -59,10 +138,16 @@ class ConnectionsWidget(Static):
     def update_stats(self, connections):
         self.table.clear()
         for conn in connections:
+            status_style = ""
+            if conn['status'] == 'ESTABLISHED':
+                status_style = "[green]"
+            elif conn['status'] == 'LISTEN':
+                status_style = "[yellow]"
+            
             self.table.add_row(
                 conn['laddr'],
                 conn['raddr'],
-                conn['status'],
+                f"{status_style}{conn['status']}[/]",
                 str(conn['pid'])
             )
 
@@ -91,8 +176,32 @@ class DiskWidget(Static):
             self.write_spark.data = []
         self.read_spark.data = self.read_spark.data + [read]
         self.write_spark.data = self.write_spark.data + [write]
-        self.read_label.update(f"{read:.1f} KB/s")
-        self.write_label.update(f"{write:.1f} KB/s")
+        self.read_label.update(f"[blue]{read:.1f} KB/s[/blue]")
+        self.write_label.update(f"[orange3]{write:.1f} KB/s[/orange3]")
+
+class DiskHealthWidget(Static):
+    def compose(self) -> ComposeResult:
+        yield Label("Disk S.M.A.R.T. Health Assessment")
+        self.table = DataTable()
+        self.table.add_columns("Device", "Model", "Status", "Temp", "Power On", "Reallocated")
+        yield self.table
+
+    def update_stats(self, disks):
+        self.table.clear()
+        if not disks:
+            self.table.add_row("No disks detected or insufficient permissions (need sudo)", "-", "-", "-", "-", "-")
+            return
+
+        for disk in disks:
+            status_style = "[green]" if disk['status'] == "PASSED" else "[red]"
+            self.table.add_row(
+                disk['device'],
+                disk['model'],
+                f"{status_style}{disk['status']}[/]",
+                disk['temp'],
+                disk['power_on'],
+                str(disk['reallocated'])
+            )
 
 class GPUWidget(Static):
     def compose(self) -> ComposeResult:
@@ -103,7 +212,7 @@ class GPUWidget(Static):
 
     def update_stats(self, gpus):
         if not gpus:
-            self.gpu_info.update("No compatible GPUs detected.")
+            self.gpu_info.update("[dim]No compatible GPUs detected.[/dim]")
             return
         
         info = ""
@@ -123,43 +232,125 @@ class ProcessWidget(Static):
     def update_stats(self, processes):
         self.table.clear()
         for proc in processes:
+            cpu_style = ""
+            if proc['cpu'] > 50: cpu_style = "[bold red]"
+            elif proc['cpu'] > 20: cpu_style = "[yellow]"
+            
             self.table.add_row(
                 str(proc['pid']),
-                proc['name'],
-                f"{proc['cpu']}%",
+                f"[bold]{proc['name']}[/]",
+                f"{cpu_style}{proc['cpu']}%[/]",
                 f"{proc['mem']:.1f}%"
             )
 
 class TaskManagerApp(App):
+    BINDINGS = [
+        ("q", "quit", "Quit"),
+        ("escape", "quit", "Exit"),
+    ]
     CSS = """
     Screen {
-        background: #1a1b26;
+        background: black;
+        color: #00FF00;
+    }
+    Header {
+        background: black;
+        color: #00FF00;
+        border-bottom: solid white;
+    }
+    Footer {
+        background: black;
+        color: #00FF00;
+        border-top: solid white;
+    }
+    TabbedContent {
+        background: black;
+    }
+    Tabs {
+        background: black;
+        border-bottom: solid white;
+    }
+    Tab {
+        color: #00FF00;
+    }
+    Tab:focus {
+        background: #004400;
     }
     TabPane {
         padding: 1 2;
+        background: black;
     }
     Label {
-        color: #7aa2f7;
+        color: #00FF00;
         text-style: bold;
         margin-bottom: 1;
     }
+    Static {
+        color: #00FF00;
+    }
+    #dashboard-grid {
+        grid-size: 3 1;
+        grid-gutter: 2;
+        height: 15;
+    }
+    .dash-card {
+        border: solid white;
+        padding: 1;
+        background: black;
+        align: center middle;
+        text-align: center;
+    }
+    .dash-card Digits {
+        color: #00FF00;
+        margin: 1 0;
+    }
+    .core-row {
+        height: auto;
+        margin-bottom: 0;
+    }
+    .core-label {
+        width: 8;
+        color: #00FF00;
+    }
     .stats-row {
         height: auto;
-        border: solid #414868;
+        border: solid white;
         padding: 1;
+        margin-bottom: 1;
     }
     ProgressBar {
         width: 100%;
         margin-bottom: 0;
     }
+    ProgressBar > .bar--bar {
+        color: #00FF00;
+        background: #002200;
+    }
+    ProgressBar > .bar--complete {
+        color: #00FF00;
+    }
     Sparkline {
         width: 100%;
-        height: 10;
-        color: #bb9af7;
+        height: 6;
+        color: #00FF00;
+    }
+    #dash-net-spark {
+        height: 3;
+        color: #00FF00;
     }
     DataTable {
         height: 100%;
+        background: black;
+        color: #00FF00;
         border: none;
+    }
+    DataTable > .datatable--header {
+        background: #002200;
+        color: #00FF00;
+        text-style: bold;
+    }
+    DataTable > .datatable--cursor {
+        background: #004400;
     }
     """
 
@@ -168,51 +359,64 @@ class TaskManagerApp(App):
         self.monitor = Monitor(mock=mock)
 
     def compose(self) -> ComposeResult:
-        yield Header()
+        yield Header(show_clock=True)
         with TabbedContent():
+            with TabPane("Dashboard"):
+                self.dash_widget = DashboardWidget()
+                yield self.dash_widget
             with TabPane("CPU"):
                 self.cpu_widget = CPUWidget()
                 yield self.cpu_widget
-            with TabPane("Network"):
-                self.net_widget = NetworkWidget()
-                yield self.net_widget
-            with TabPane("Connections"):
-                self.conn_widget = ConnectionsWidget()
-                yield self.conn_widget
-            with TabPane("Disk"):
-                self.disk_widget = DiskWidget()
-                yield self.disk_widget
-            with TabPane("GPU"):
-                self.gpu_widget = GPUWidget()
-                yield self.gpu_widget
             with TabPane("Processes"):
                 self.proc_widget = ProcessWidget()
                 yield self.proc_widget
+            with TabPane("Memory"):
+                self.mem_widget = MemoryWidget()
+                yield self.mem_widget
+            with TabPane("Health"):
+                self.health_widget = DiskHealthWidget()
+                yield self.health_widget
+            with TabPane("Network"):
+                self.net_widget = NetworkWidget()
+                yield self.net_widget
+            with TabPane("Disk"):
+                self.disk_widget = DiskWidget()
+                yield self.disk_widget
+            with TabPane("Connections"):
+                self.conn_widget = ConnectionsWidget()
+                yield self.conn_widget
+            with TabPane("GPU"):
+                self.gpu_widget = GPUWidget()
+                yield self.gpu_widget
         yield Footer()
 
     def on_mount(self) -> None:
         self.set_interval(1.0, self.refresh_stats)
 
     def refresh_stats(self) -> None:
-        # Only update the active tab's data for performance if needed, 
-        # but for now we update all to keep sparklines flowing.
+        # Get all stats from monitor
         cpu_stats = self.monitor.get_cpu_stats()
-        self.cpu_widget.update_stats(cpu_stats)
-
-        net_down, net_up = self.monitor.get_network_stats()
-        self.net_widget.update_stats(net_down, net_up)
-
-        conn_stats = self.monitor.get_network_connections()
-        self.conn_widget.update_stats(conn_stats)
-
-        disk_read, disk_write = self.monitor.get_disk_stats()
-        self.disk_widget.update_stats(disk_read, disk_write)
-
+        mem_stats = self.monitor.get_memory_stats()
+        net_stats = self.monitor.get_network_stats()
+        disk_stats = self.monitor.get_disk_stats()
         gpu_stats = self.monitor.get_gpu_stats()
-        self.gpu_widget.update_stats(gpu_stats)
-
         proc_stats = self.monitor.get_process_list()
+        conn_stats = self.monitor.get_network_connections()
+        health_stats = self.monitor.get_disk_health()
+
+        # Update Dashboard
+        cpu_avg = sum(cpu_stats) / len(cpu_stats) if cpu_stats else 0
+        self.dash_widget.update_stats(cpu_avg, mem_stats, net_stats)
+
+        # Update Individual Widgets
+        self.cpu_widget.update_stats(cpu_stats)
+        self.mem_widget.update_stats(*mem_stats)
+        self.net_widget.update_stats(*net_stats)
         self.proc_widget.update_stats(proc_stats)
+        self.disk_widget.update_stats(*disk_stats)
+        self.conn_widget.update_stats(conn_stats)
+        self.gpu_widget.update_stats(gpu_stats)
+        self.health_widget.update_stats(health_stats)
 
 if __name__ == "__main__":
     mock = "--mock" in sys.argv

@@ -31,6 +31,16 @@ class Monitor:
             return [random.randint(5, 95) for _ in range(8)]
         return psutil.cpu_percent(percpu=True)
 
+    def get_memory_stats(self):
+        """Returns (percent, used_gb, total_gb)."""
+        if self.mock:
+            total = 16.0
+            used = random.uniform(2.0, 14.0)
+            return (used / total) * 100, used, total
+        
+        mem = psutil.virtual_memory()
+        return mem.percent, mem.used / (1024**3), mem.total / (1024**3)
+
     def get_network_stats(self):
         """Returns (download_kbps, upload_kbps)."""
         current_stats = psutil.net_io_counters()
@@ -70,6 +80,75 @@ class Monitor:
             return random.uniform(50, 2000), random.uniform(20, 1000)
 
         return read_kbps, write_kbps
+
+    def get_disk_health(self):
+        """Returns list of dicts with Disk S.M.A.R.T / Health info."""
+        if self.mock:
+            return [
+                {
+                    "device": "/dev/nvme0n1",
+                    "model": "Samsung SSD 980 PRO 1TB",
+                    "status": "PASSED",
+                    "temp": "32°C",
+                    "power_on": "4,520 hours",
+                    "reallocated": 0,
+                    "wear_level": "98%"
+                },
+                {
+                    "device": "/dev/sda",
+                    "model": "Crucial CT500MX500SSD1",
+                    "status": "PASSED",
+                    "temp": "28°C",
+                    "power_on": "12,150 hours",
+                    "reallocated": 2,
+                    "wear_level": "85%"
+                }
+            ]
+
+        disks = []
+        try:
+            # We use smartctl -j (JSON output) which is standard in smartmontools 7.0+
+            # Note: This requires root or specific sudoers permissions
+            import subprocess
+            import json
+
+            # Get list of devices
+            devices_proc = subprocess.run(['sudo', 'smartctl', '--scan-open', '-j'], capture_output=True, text=True)
+            if devices_proc.returncode == 0:
+                scan_data = json.loads(devices_proc.stdout)
+                for dev in scan_data.get('devices', []):
+                    name = dev.get('name')
+                    if not name: continue
+
+                    info_proc = subprocess.run(['sudo', 'smartctl', '-a', '-j', name], capture_output=True, text=True)
+                    if info_proc.returncode == 0:
+                        data = json.loads(info_proc.stdout)
+                        
+                        # Extract key metrics
+                        status = data.get('smart_status', {}).get('passed', False)
+                        model = data.get('model_name', 'Unknown')
+                        temp = data.get('temperature', {}).get('current', 'N/A')
+                        power_on = data.get('power_on_time', {}).get('hours', 'N/A')
+                        
+                        # Find reallocated sectors (ID 5 for SATA, or specific for NVMe)
+                        reallocated = 0
+                        for attr in data.get('ata_smart_attributes', {}).get('table', []):
+                            if attr.get('id') == 5:
+                                reallocated = attr.get('raw', {}).get('value', 0)
+
+                        disks.append({
+                            "device": name,
+                            "model": model,
+                            "status": "PASSED" if status else "FAILED",
+                            "temp": f"{temp}°C" if temp != 'N/A' else 'N/A',
+                            "power_on": f"{power_on:,} hours" if power_on != 'N/A' else 'N/A',
+                            "reallocated": reallocated,
+                            "wear_level": "N/A" # Harder to get generically without vendor specific tools
+                        })
+        except Exception:
+            pass
+            
+        return disks
 
     def get_process_list(self, limit=10):
         """Returns a list of top processes by CPU usage."""
