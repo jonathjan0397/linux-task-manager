@@ -293,14 +293,14 @@ class TaskManagerApp(App):
         ("escape", "quit", "Exit"),
         ("t", "next_tab", "Next Tab"),
         ("shift+t", "previous_tab", "Prev Tab"),
-        ("1", "switch_tab(0)", "Dashboard"),
+        ("1", "switch_tab(0)", "Dash"),
         ("2", "switch_tab(1)", "CPU"),
-        ("3", "switch_tab(2)", "Processes"),
-        ("4", "switch_tab(3)", "Memory"),
+        ("3", "switch_tab(2)", "Proc"),
+        ("4", "switch_tab(3)", "Mem"),
         ("5", "switch_tab(4)", "Health"),
-        ("6", "switch_tab(5)", "Network"),
+        ("6", "switch_tab(5)", "Net"),
         ("7", "switch_tab(6)", "Disk"),
-        ("8", "switch_tab(7)", "Connections"),
+        ("8", "switch_tab(7)", "Conn"),
         ("9", "switch_tab(9)", "About"),
     ]
     CSS = """
@@ -342,7 +342,6 @@ class TaskManagerApp(App):
     }
     TabbedContent {
         background: black;
-        height: 100%;
     }
     Tabs {
         background: black;
@@ -359,7 +358,6 @@ class TaskManagerApp(App):
         background: black;
         border: solid white;
         margin: 1;
-        height: 100%;
     }
     Label {
         color: #00FF00;
@@ -445,14 +443,15 @@ class TaskManagerApp(App):
 
     def action_switch_tab(self, index: int) -> None:
         tc = self.query_one(TabbedContent)
-        # Use child panes to determine tab order
+        # TabPane ids are automatically prefixed with "tab-" by TabbedContent
+        # We access the internal panes to find the right ID
         panes = list(tc.query(TabPane))
         if index < len(panes):
             tc.active = panes[index].id
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        with TabbedContent():
+        with TabbedContent(id="tabs-main"):
             with TabPane("Dashboard", id="tab-dash"):
                 self.dash_widget = DashboardWidget()
                 yield self.dash_widget
