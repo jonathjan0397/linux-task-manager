@@ -319,21 +319,31 @@ class ProcessWidget(Static):
     def compose(self) -> ComposeResult:
         yield Label("Top System Processes")
         self.table = DataTable()
-        self.table.add_columns("PID", "Name", "CPU%", "MEM%")
         yield self.table
+
+    def on_mount(self) -> None:
+        self.table.add_columns("PID", "Name", "CPU%", "MEM%")
 
     def update_stats(self, processes):
         self.table.clear()
+        
         if processes and isinstance(processes[0], dict) and "error" in processes[0]:
+            # If columns were cleared (shouldn't happen with .clear()), add them back
+            if not self.table.columns:
+                self.table.add_columns("PID", "Name", "CPU%", "MEM%")
             self.table.add_row("-", f"[red]{processes[0]['error']}[/]", "-", "-")
             return
 
         if not processes:
+            if not self.table.columns:
+                self.table.add_columns("PID", "Name", "CPU%", "MEM%")
             self.table.add_row("-", "No processes found", "-", "-")
             return
 
         for proc in processes:
             cpu = proc['cpu']
+            # Divide by CPU count for actual per-core percentage (psutil logic on some OSs)
+            # But let's keep it simple for now as per monitor output
             if cpu > 50:
                 cpu_display = f"[bold red]{cpu}%[/]"
             elif cpu > 20:
