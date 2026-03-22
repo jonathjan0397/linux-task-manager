@@ -111,7 +111,11 @@ class Monitor:
         if shutil.which("journalctl"): sources.append("journalctl")
         if shutil.which("dmesg"): sources.append("dmesg")
 
-        standard_files = ["/var/log/syslog", "/var/log/messages", "/var/log/auth.log", "/var/log/kern.log"]
+        standard_files = [
+            "/var/log/syslog", "/var/log/messages", "/var/log/auth.log", 
+            "/var/log/secure", "/var/log/kern.log", "/var/log/cron.log",
+            "/var/log/boot.log"
+        ]
         for f in standard_files:
             if os.path.exists(f):
                 sources.append(os.path.basename(f))
@@ -182,16 +186,28 @@ class Monitor:
             import subprocess
             import json
 
-            devices_proc = subprocess.run(['sudo', 'smartctl', '--scan-open', '-j'], capture_output=True, text=True)
+            # Check if smartctl is available
+            import shutil
+            if not shutil.which("smartctl"):
+                return []
+
+            devices_proc = subprocess.run(['sudo', 'smartctl', '--scan-open', '-j'], capture_output=True, text=True, timeout=5)
             if devices_proc.returncode == 0:
-                scan_data = json.loads(devices_proc.stdout)
+                try:
+                    scan_data = json.loads(devices_proc.stdout)
+                except json.JSONDecodeError:
+                    return []
+
                 for dev in scan_data.get('devices', []):
                     name = dev.get('name')
                     if not name: continue
 
-                    info_proc = subprocess.run(['sudo', 'smartctl', '-a', '-j', name], capture_output=True, text=True)
+                    info_proc = subprocess.run(['sudo', 'smartctl', '-a', '-j', name], capture_output=True, text=True, timeout=5)
                     if info_proc.returncode == 0:
-                        data = json.loads(info_proc.stdout)
+                        try:
+                            data = json.loads(info_proc.stdout)
+                        except json.JSONDecodeError:
+                            continue
                         
                         status_passed = data.get('smart_status', {}).get('passed', False)
                         model = data.get('model_name', 'Unknown')
@@ -199,9 +215,14 @@ class Monitor:
                         power_on = data.get('power_on_time', {}).get('hours', 'N/A')
                         
                         reallocated = 0
-                        for attr in data.get('ata_smart_attributes', {}).get('table', []):
-                            if attr.get('id') == 5:
-                                reallocated = attr.get('raw', {}).get('value', 0)
+                        # Try to find reallocated sectors in different table formats
+                        for table_key in ['ata_smart_attributes', 'nvme_smart_health_information_log']:
+                            table = data.get(table_key, {})
+                            if isinstance(table, dict) and 'table' in table:
+                                for attr in table['table']:
+                                    if attr.get('id') == 5 or "reallocated" in attr.get('name', "").lower():
+                                        reallocated = attr.get('raw', {}).get('value', 0)
+                                        break
 
                         disks.append({
                             "device": name,

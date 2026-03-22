@@ -317,7 +317,7 @@ class AboutWidget(Static):
             " - Process management\n"
             " - System log viewer\n\n"
             "Created for the [bold green]Linux[/bold green] community.\n"
-            "Version: [bold yellow]1.2.1[/bold yellow]\n\n"
+            "Version: [bold yellow]1.2.2[/bold yellow]\n\n"
             "Shortcut Keys:\n"
             " [bold yellow]1-9, 0[/bold yellow]: Switch Tabs\n"
             " [bold yellow]t / T[/bold yellow]: Next / Previous Tab\n"
