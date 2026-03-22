@@ -4,6 +4,20 @@ from textual.widgets import Header, Footer, Static, ProgressBar, Sparkline, Labe
 from textual.containers import Container, Vertical, Horizontal, Grid
 from monitor import Monitor
 
+def get_icon(icon_type: str) -> str:
+    """Returns an icon with a text fallback for compatibility."""
+    icons = {
+        "pass": ("✅", "OK"),
+        "warn": ("⚠️", "!!"),
+        "alert": ("🚨", "!!"),
+    }
+    # Check if the terminal likely supports Unicode (common heuristic)
+    import os
+    supports_unicode = "UTF-8" in os.environ.get("LANG", "").upper() or os.environ.get("TERM_PROGRAM") == "vscode"
+    
+    icon, fallback = icons.get(icon_type, ("", ""))
+    return icon if supports_unicode else fallback
+
 class DashboardWidget(Static):
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -64,16 +78,20 @@ class DashboardWidget(Static):
         self.net_spark.data = self.net_spark.data + [down + up]
 
 class CPUWidget(Static):
+    def __init__(self, monitor):
+        super().__init__()
+        self.monitor = monitor
+        self.core_count = len(self.monitor.get_cpu_stats())
+
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label("Per-Core CPU Usage")
             self.bars = []
-            for i in range(16): # Support up to 16 cores
+            for i in range(self.core_count):
                 with Horizontal(classes="core-row"):
                     label = Label(f"Core {i:2d}", classes="core-label")
                     bar = ProgressBar(total=100, show_percentage=True, id=f"cpu-{i}")
-                    bar.display = False
-                    label.display = False
+                    # In dynamic mode, we don't hide them initially
                     self.bars.append((label, bar))
                     yield label
                     yield bar
@@ -208,10 +226,10 @@ class DiskHealthWidget(Static):
 
         for disk in disks:
             status_style = "[green]" if disk['status'] == "PASSED" else "[bold red]"
-            icon = "✅" if disk['status'] == "PASSED" else "⚠️"
+            icon = get_icon("pass") if disk['status'] == "PASSED" else get_icon("warn")
             if disk.get('alert'):
                 status_style = "[bold red]"
-                icon = "🚨"
+                icon = get_icon("alert")
 
             self.table.add_row(
                 icon,
@@ -317,7 +335,7 @@ class AboutWidget(Static):
             " - Process management\n"
             " - System log viewer\n\n"
             "Created for the [bold green]Linux[/bold green] community.\n"
-            "Version: [bold yellow]1.2.2[/bold yellow]\n\n"
+            "Version: [bold yellow]1.2.3[/bold yellow]\n\n"
             "Shortcut Keys:\n"
             " [bold yellow]1-9, 0[/bold yellow]: Switch Tabs\n"
             " [bold yellow]t / T[/bold yellow]: Next / Previous Tab\n"
@@ -517,7 +535,7 @@ class TaskManagerApp(App):
                 self.dash_widget = DashboardWidget()
                 yield self.dash_widget
             with TabPane("CPU", id="tab-cpu"):
-                self.cpu_widget = CPUWidget()
+                self.cpu_widget = CPUWidget(self.monitor)
                 yield self.cpu_widget
             with TabPane("Processes", id="tab-proc"):
                 self.proc_widget = ProcessWidget()
