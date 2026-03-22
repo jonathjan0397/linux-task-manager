@@ -275,6 +275,10 @@ class GPUCard(Vertical):
         yield self.mem_label
 
     def update_stats(self, util, mem):
+        # Ensure sub-widgets exist before updating (composition is async after mount)
+        if not hasattr(self, "util_label"):
+            return
+
         self.util_label.update(f"Utilization: [green]{util}%[/green]")
         self.mem_label.update(f"Memory: [yellow]{mem:.1f}%[/yellow]")
         if self.spark.data is None:
