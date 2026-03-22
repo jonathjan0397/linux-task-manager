@@ -68,13 +68,15 @@ class DashboardWidget(Static):
         self.os_label.update(f"OS: [bold cyan]{os_name}[/]")
         self.uptime_label.update(f"Uptime: [bold yellow]{uptime}[/]")
 
-        # CPU
-        self.cpu_digits.update(f"{cpu_avg:.0f}%")
+        # CPU - Use integer for Digits to avoid glitches with decimals/percent signs
+        val_cpu = int(cpu_avg)
+        self.cpu_digits.update(f"{val_cpu}%")
         self.cpu_bar.progress = cpu_avg
         
         # Memory
         percent, used, total = mem_data
-        self.mem_digits.update(f"{percent:.0f}%")
+        val_mem = int(percent)
+        self.mem_digits.update(f"{val_mem}%")
         self.mem_bar.progress = percent
         self.mem_label.update(f"{used:.1f} / {total:.1f} GB")
 
@@ -176,6 +178,10 @@ class ConnectionsWidget(Static):
 
     def update_stats(self, connections):
         self.table.clear()
+        if connections and isinstance(connections[0], dict) and "error" in connections[0]:
+            self.table.add_row("-", f"[red]{connections[0]['error']}[/]", "-", "-")
+            return
+
         for conn in connections:
             status = conn['status']
             if status == 'ESTABLISHED':
@@ -230,7 +236,11 @@ class DiskHealthWidget(Static):
     def update_stats(self, disks):
         self.table.clear()
         if not disks:
-            self.table.add_row("", "No disks detected or insufficient permissions (need sudo)", "-", "-", "-", "-", "-")
+            self.table.add_row("", "No disks detected.", "-", "-", "-", "-", "-")
+            return
+
+        if disks and isinstance(disks[0], dict) and "error" in disks[0]:
+            self.table.add_row("!", f"[red]{disks[0]['error']}[/]", "-", "-", "-", "-", "-")
             return
 
         for disk in disks:
@@ -253,21 +263,74 @@ class DiskHealthWidget(Static):
 class GPUWidget(Static):
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label("GPU Performance")
-            self.gpu_info = Static("Searching for GPUs...")
-            yield self.gpu_info
+            yield Label("GPU Performance Tracking")
+            self.gpu_container = Vertical(id="gpu-container")
+            yield self.gpu_container
 
     def update_stats(self, gpus):
         if not gpus:
-            self.gpu_info.update("[dim]No compatible GPUs detected.[/dim]")
+            self.gpu_container.remove_children()
+            self.gpu_container.mount(Label("[dim]No compatible GPUs detected.[/dim]"))
             return
         
-        info = ""
-        for gpu in gpus:
-            info += f"[bold cyan]{gpu.get('name', 'Unknown GPU')}[/bold cyan]\n"
-            info += f"Utilization: [green]{gpu['util']}%[/green]\n"
-            info += f"Memory: [yellow]{gpu['mem']:.1f}%[/yellow]\n\n"
-        self.gpu_info.update(info)
+        # If the number of GPUs changed or it's the first run, rebuild
+        current_widgets = list(self.gpu_container.query(".gpu-card"))
+        if len(current_widgets) != len(gpus):
+            self.gpu_container.remove_children()
+            for i, gpu in enumerate(gpus):
+                with Vertical(classes="gpu-card", id=f"gpu-card-{i}") as card:
+                    card.mount(Label(f"[bold cyan]{gpu.get('name', 'GPU ' + str(i))}[/bold cyan]"))
+                    card.mount(Label(f"Utilization: 0%", id=f"gpu-util-label-{i}"))
+                    card.mount(Sparkline(id=f"gpu-spark-{i}"))
+                    card.mount(Label(f"Memory: 0%", id=f"gpu-mem-label-{i}"))
+            self.gpu_container.mount_all(current_widgets) # This logic is slightly wrong for mount, let's just mount manually
+
+    # Actually, a better way to update dynamic content in Textual is to use a map of widgets
+    def on_mount(self):
+        self.gpu_widgets = {}
+
+    def update_stats(self, gpus):
+        if not gpus:
+            if not hasattr(self, "no_gpu_label"):
+                self.gpu_container.remove_children()
+                self.no_gpu_label = Label("[dim]No compatible GPUs detected.[/dim]")
+                self.gpu_container.mount(self.no_gpu_label)
+            return
+        
+        if hasattr(self, "no_gpu_label"):
+            self.no_gpu_label.remove()
+            delattr(self, "no_gpu_label")
+
+        for i, gpu in enumerate(gpus):
+            if i not in self.gpu_widgets:
+                # Create new card for this GPU
+                card = Vertical(classes="gpu-card")
+                name_label = Label(f"[bold cyan]{gpu.get('name', 'GPU ' + str(i))}[/bold cyan]")
+                util_label = Label("Utilization: 0%")
+                spark = Sparkline()
+                mem_label = Label("Memory: 0%")
+                
+                card.mount(name_label)
+                card.mount(util_label)
+                card.mount(spark)
+                card.mount(mem_label)
+                
+                self.gpu_container.mount(card)
+                self.gpu_widgets[i] = {
+                    "util": util_label,
+                    "spark": spark,
+                    "mem": mem_label
+                }
+            
+            # Update existing widgets
+            stats = self.gpu_widgets[i]
+            util = gpu['util']
+            stats['util'].update(f"Utilization: [green]{util}%[/green]")
+            stats['mem'].update(f"Memory: [yellow]{gpu['mem']:.1f}%[/yellow]")
+            
+            if stats['spark'].data is None:
+                stats['spark'].data = []
+            stats['spark'].data = stats['spark'].data + [util]
 
 class ProcessWidget(Static):
     def compose(self) -> ComposeResult:
@@ -278,6 +341,14 @@ class ProcessWidget(Static):
 
     def update_stats(self, processes):
         self.table.clear()
+        if processes and isinstance(processes[0], dict) and "error" in processes[0]:
+            self.table.add_row("-", f"[red]{processes[0]['error']}[/]", "-", "-")
+            return
+
+        if not processes:
+            self.table.add_row("-", "No processes found", "-", "-")
+            return
+
         for proc in processes:
             cpu = proc['cpu']
             if cpu > 50:
@@ -344,7 +415,7 @@ class AboutWidget(Static):
             " - Process management\n"
             " - System log viewer\n\n"
             "Created for the [bold green]Linux[/bold green] community.\n"
-            "Version: [bold yellow]1.2.3[/bold yellow]\n\n"
+            "Version: [bold yellow]1.3.0[/bold yellow]\n\n"
             "Shortcut Keys:\n"
             " [bold yellow]1-9, 0[/bold yellow]: Switch Tabs\n"
             " [bold yellow]t / T[/bold yellow]: Next / Previous Tab\n"
@@ -366,6 +437,7 @@ class TaskManagerApp(App):
         ("7", "switch_tab(6)", "Net"),
         ("8", "switch_tab(7)", "Disk"),
         ("9", "switch_tab(8)", "Conn"),
+        ("g", "switch_tab(9)", "GPU"),
         ("0", "switch_tab(10)", "About"),
     ]
     CSS = """
@@ -520,6 +592,16 @@ class TaskManagerApp(App):
     #log-text {
         height: 100%;
         overflow-y: scroll;
+    }
+    .gpu-card {
+        border: solid white;
+        padding: 1;
+        margin-bottom: 1;
+        height: auto;
+    }
+    .gpu-card Sparkline {
+        height: 3;
+        margin: 1 0;
     }
     """
 

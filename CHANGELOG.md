@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-03-22
+
+### Added
+- GPU Individual Tracking: Each GPU now has its own performance card with a real-time sparkline graph.
+- Added `g` shortcut key for direct access to the GPU tab.
+- Added comprehensive error reporting for root/sudo-dependent features (Health, Connections, Processes).
+
+### Fixed
+- Fixed Dashboard "Digits" glitches by rounding values to integers for better fit in cards.
+- Fixed Top System Processes display: corrected `psutil` sampling logic to show actual CPU usage.
+- Fixed Smart Health and Active Connections visibility by providing clear "Access Denied" feedback when running without root.
+- Fixed hotkey for "About" tab and aligned shortcut labels.
+
 ## [1.2.3] - 2026-03-22
 
 ### Changed

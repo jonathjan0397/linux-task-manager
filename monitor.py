@@ -185,61 +185,61 @@ class Monitor:
         try:
             import subprocess
             import json
-
-            # Check if smartctl is available
             import shutil
+
             if not shutil.which("smartctl"):
-                return []
+                return [{"error": "smartctl not installed. Please install smartmontools."}]
 
-            devices_proc = subprocess.run(['sudo', 'smartctl', '--scan-open', '-j'], capture_output=True, text=True, timeout=5)
-            if devices_proc.returncode == 0:
-                try:
-                    scan_data = json.loads(devices_proc.stdout)
-                except json.JSONDecodeError:
-                    return []
+            # Check if we have sudo or if we are root
+            is_root = os.getuid() == 0 if hasattr(os, 'getuid') else False
+            cmd_prefix = [] if is_root else ['sudo', '-n']
+            
+            devices_proc = subprocess.run(cmd_prefix + ['smartctl', '--scan-open', '-j'], capture_output=True, text=True, timeout=5)
+            if devices_proc.returncode != 0:
+                return [{"error": "Permission denied. Disk health requires root/sudo privileges."}]
 
-                for dev in scan_data.get('devices', []):
-                    name = dev.get('name')
-                    if not name: continue
+            scan_data = json.loads(devices_proc.stdout)
+            for dev in scan_data.get('devices', []):
+                name = dev.get('name')
+                if not name: continue
 
-                    info_proc = subprocess.run(['sudo', 'smartctl', '-a', '-j', name], capture_output=True, text=True, timeout=5)
-                    if info_proc.returncode == 0:
-                        try:
-                            data = json.loads(info_proc.stdout)
-                        except json.JSONDecodeError:
-                            continue
-                        
-                        status_passed = data.get('smart_status', {}).get('passed', False)
-                        model = data.get('model_name', 'Unknown')
-                        temp = data.get('temperature', {}).get('current', 'N/A')
-                        power_on = data.get('power_on_time', {}).get('hours', 'N/A')
-                        
-                        reallocated = 0
-                        # Try to find reallocated sectors in different table formats
-                        for table_key in ['ata_smart_attributes', 'nvme_smart_health_information_log']:
-                            table = data.get(table_key, {})
-                            if isinstance(table, dict) and 'table' in table:
-                                for attr in table['table']:
-                                    if attr.get('id') == 5 or "reallocated" in attr.get('name', "").lower():
-                                        reallocated = attr.get('raw', {}).get('value', 0)
-                                        break
+                info_proc = subprocess.run(cmd_prefix + ['smartctl', '-a', '-j', name], capture_output=True, text=True, timeout=5)
+                if info_proc.returncode == 0:
+                    try:
+                        data = json.loads(info_proc.stdout)
+                    except json.JSONDecodeError:
+                        continue
+                    
+                    status_passed = data.get('smart_status', {}).get('passed', False)
+                    model = data.get('model_name', 'Unknown')
+                    temp = data.get('temperature', {}).get('current', 'N/A')
+                    power_on = data.get('power_on_time', {}).get('hours', 'N/A')
+                    
+                    reallocated = 0
+                    for table_key in ['ata_smart_attributes', 'nvme_smart_health_information_log']:
+                        table = data.get(table_key, {})
+                        if isinstance(table, dict) and 'table' in table:
+                            for attr in table['table']:
+                                if attr.get('id') == 5 or "reallocated" in attr.get('name', "").lower():
+                                    reallocated = attr.get('raw', {}).get('value', 0)
+                                    break
 
-                        disks.append({
-                            "device": name,
-                            "model": model,
-                            "status": "PASSED" if status_passed else "FAILED",
-                            "alert": not status_passed or reallocated > 0,
-                            "temp": f"{temp}°C" if temp != 'N/A' else 'N/A',
-                            "power_on": f"{power_on:,} hours" if power_on != 'N/A' else 'N/A',
-                            "reallocated": reallocated,
-                            "wear_level": "N/A"
-                        })
-        except Exception:
-            pass
+                    disks.append({
+                        "device": name,
+                        "model": model,
+                        "status": "PASSED" if status_passed else "FAILED",
+                        "alert": not status_passed or reallocated > 0,
+                        "temp": f"{temp}°C" if temp != 'N/A' else 'N/A',
+                        "power_on": f"{power_on:,} hours" if power_on != 'N/A' else 'N/A',
+                        "reallocated": reallocated,
+                        "wear_level": "N/A"
+                    })
+        except Exception as e:
+            return [{"error": f"Error: {str(e)}"}]
             
         return disks
 
-    def get_process_list(self, limit=10):
+    def get_process_list(self, limit=15):
         """Returns a list of top processes by CPU usage."""
         if self.mock:
             mock_names = ["python", "chrome", "vscode", "docker", "slack", "systemd", "gnome-shell"]
@@ -253,12 +253,16 @@ class Monitor:
             ]
 
         processes = []
-        for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']):
+        # Use a single pass to collect info
+        for proc in psutil.process_iter(['pid', 'name', 'memory_percent']):
             try:
+                # cpu_percent(interval=0) gives usage since last call
+                # On first call it will be 0, but app loop will call this repeatedly
+                cpu = proc.cpu_percent(interval=None)
                 processes.append({
                     "pid": proc.info['pid'],
                     "name": proc.info['name'],
-                    "cpu": proc.info['cpu_percent'],
+                    "cpu": cpu,
                     "mem": proc.info['memory_percent']
                 })
             except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -268,7 +272,7 @@ class Monitor:
         processes.sort(key=lambda x: x['cpu'], reverse=True)
         return processes[:limit]
 
-    def get_network_connections(self, limit=20):
+    def get_network_connections(self, limit=25):
         """Returns a list of active network connections."""
         if self.mock:
             return [
@@ -282,6 +286,7 @@ class Monitor:
 
         connections = []
         try:
+            # kind='inet' shows IPv4 and IPv6
             for conn in psutil.net_connections(kind='inet'):
                 laddr = f"{conn.laddr.ip}:{conn.laddr.port}" if conn.laddr else "-"
                 raddr = f"{conn.raddr.ip}:{conn.raddr.port}" if conn.raddr else "-"
@@ -292,7 +297,9 @@ class Monitor:
                     "pid": conn.pid or "-"
                 })
         except (psutil.AccessDenied):
-            pass
+            return [{"error": "Access Denied. Root/sudo required to see all connections."}]
+        except Exception as e:
+            return [{"error": f"Error: {str(e)}"}]
             
         return connections[:limit]
 
