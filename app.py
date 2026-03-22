@@ -260,6 +260,27 @@ class DiskHealthWidget(Static):
                 f"[bold red]{disk['reallocated']}[/]" if disk['reallocated'] > 0 else str(disk['reallocated'])
             )
 
+class GPUCard(Vertical):
+    def __init__(self, name: str):
+        super().__init__(classes="gpu-card")
+        self.gpu_name = name
+
+    def compose(self) -> ComposeResult:
+        yield Label(f"[bold cyan]{self.gpu_name}[/bold cyan]")
+        self.util_label = Label("Utilization: 0%")
+        yield self.util_label
+        self.spark = Sparkline()
+        yield self.spark
+        self.mem_label = Label("Memory: 0%")
+        yield self.mem_label
+
+    def update_stats(self, util, mem):
+        self.util_label.update(f"Utilization: [green]{util}%[/green]")
+        self.mem_label.update(f"Memory: [yellow]{mem:.1f}%[/yellow]")
+        if self.spark.data is None:
+            self.spark.data = []
+        self.spark.data = self.spark.data + [util]
+
 class GPUWidget(Static):
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -267,27 +288,8 @@ class GPUWidget(Static):
             self.gpu_container = Vertical(id="gpu-container")
             yield self.gpu_container
 
-    def update_stats(self, gpus):
-        if not gpus:
-            self.gpu_container.remove_children()
-            self.gpu_container.mount(Label("[dim]No compatible GPUs detected.[/dim]"))
-            return
-        
-        # If the number of GPUs changed or it's the first run, rebuild
-        current_widgets = list(self.gpu_container.query(".gpu-card"))
-        if len(current_widgets) != len(gpus):
-            self.gpu_container.remove_children()
-            for i, gpu in enumerate(gpus):
-                with Vertical(classes="gpu-card", id=f"gpu-card-{i}") as card:
-                    card.mount(Label(f"[bold cyan]{gpu.get('name', 'GPU ' + str(i))}[/bold cyan]"))
-                    card.mount(Label(f"Utilization: 0%", id=f"gpu-util-label-{i}"))
-                    card.mount(Sparkline(id=f"gpu-spark-{i}"))
-                    card.mount(Label(f"Memory: 0%", id=f"gpu-mem-label-{i}"))
-            self.gpu_container.mount_all(current_widgets) # This logic is slightly wrong for mount, let's just mount manually
-
-    # Actually, a better way to update dynamic content in Textual is to use a map of widgets
     def on_mount(self):
-        self.gpu_widgets = {}
+        self.gpu_cards = {}
 
     def update_stats(self, gpus):
         if not gpus:
@@ -302,35 +304,12 @@ class GPUWidget(Static):
             delattr(self, "no_gpu_label")
 
         for i, gpu in enumerate(gpus):
-            if i not in self.gpu_widgets:
-                # Create new card for this GPU
-                card = Vertical(classes="gpu-card")
-                name_label = Label(f"[bold cyan]{gpu.get('name', 'GPU ' + str(i))}[/bold cyan]")
-                util_label = Label("Utilization: 0%")
-                spark = Sparkline()
-                mem_label = Label("Memory: 0%")
-                
-                card.mount(name_label)
-                card.mount(util_label)
-                card.mount(spark)
-                card.mount(mem_label)
-                
-                self.gpu_container.mount(card)
-                self.gpu_widgets[i] = {
-                    "util": util_label,
-                    "spark": spark,
-                    "mem": mem_label
-                }
+            if i not in self.gpu_cards:
+                new_card = GPUCard(gpu.get('name', f"GPU {i}"))
+                self.gpu_container.mount(new_card)
+                self.gpu_cards[i] = new_card
             
-            # Update existing widgets
-            stats = self.gpu_widgets[i]
-            util = gpu['util']
-            stats['util'].update(f"Utilization: [green]{util}%[/green]")
-            stats['mem'].update(f"Memory: [yellow]{gpu['mem']:.1f}%[/yellow]")
-            
-            if stats['spark'].data is None:
-                stats['spark'].data = []
-            stats['spark'].data = stats['spark'].data + [util]
+            self.gpu_cards[i].update_stats(gpu['util'], gpu['mem'])
 
 class ProcessWidget(Static):
     def compose(self) -> ComposeResult:
