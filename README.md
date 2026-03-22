@@ -17,16 +17,27 @@ A modern, terminal-based task manager for Linux systems, built with Python and t
 
 ## Installation & Quick Start
 
-To run the application, simply use the automated runner. It will automatically handle the virtual environment and dependencies for you:
+To get the latest version and run the application:
 
 **Linux / macOS / WSL:**
 ```bash
+# Clone the repository (if not already done)
+git clone https://github.com/jonathjan0397/linux-task-manager.git
+cd linux-task-manager
+
+# Get the latest updates
+git pull origin master
+
+# Run with automated runner
 chmod +x run.sh
 ./run.sh
 ```
 
 **Windows (PowerShell):**
 ```powershell
+# Get the latest updates
+git pull origin master
+
 # First time setup
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
