@@ -291,13 +291,17 @@ class LogViewerWidget(Static):
         self.sources = self.monitor.get_available_logs()
         self.source_list.clear()
         for s in self.sources:
-            self.source_list.append(ListItem(Label(s), id=f"source-{s}"))
+            # Textual IDs cannot contain dots, replace them with underscores
+            safe_id = s.replace(".", "_")
+            self.source_list.append(ListItem(Label(s), id=f"source-{safe_id}"))
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        source_id = event.item.id
-        source = source_id.replace("source-", "")
-        content = self.monitor.get_log_content(source)
-        self.log_text.update("\n".join(content))
+        # Get the index of the selected item from the event's list view
+        index = event.list_view.index
+        if index is not None and 0 <= index < len(self.sources):
+            source = self.sources[index]
+            content = self.monitor.get_log_content(source)
+            self.log_text.update("\n".join(content))
 
 class AboutWidget(Static):
     def compose(self) -> ComposeResult:
