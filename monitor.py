@@ -17,6 +17,7 @@ class Monitor:
         self._last_disk_stats = psutil.disk_io_counters()
         self._last_disk_time = time.time()
         self._nvidia_initialized = False
+        self._proc_cache = {}
 
         if not self.mock and HAS_PYNVML:
             try:
@@ -253,20 +254,38 @@ class Monitor:
             ]
 
         processes = []
-        # Use a single pass to collect info
-        for proc in psutil.process_iter(['pid', 'name', 'memory_percent']):
-            try:
-                # cpu_percent(interval=0) gives usage since last call
-                # On first call it will be 0, but app loop will call this repeatedly
-                cpu = proc.cpu_percent(interval=None)
-                processes.append({
-                    "pid": proc.info['pid'],
-                    "name": proc.info['name'],
-                    "cpu": cpu,
-                    "mem": proc.info['memory_percent']
-                })
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
+        # Update cache and remove dead processes
+        try:
+            current_pids = set(psutil.pids())
+            for pid in list(self._proc_cache.keys()):
+                if pid not in current_pids:
+                    del self._proc_cache[pid]
+
+            for pid in current_pids:
+                try:
+                    if pid not in self._proc_cache:
+                        self._proc_cache[pid] = psutil.Process(pid)
+                    
+                    proc = self._proc_cache[pid]
+                    with proc.oneshot():
+                        cpu = proc.cpu_percent(interval=None)
+                        mem = proc.memory_percent()
+                        name = proc.name()
+                    
+                    processes.append({
+                        "pid": pid,
+                        "name": name,
+                        "cpu": cpu,
+                        "mem": mem
+                    })
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    if pid in self._proc_cache:
+                        del self._proc_cache[pid]
+                    continue
+                except Exception:
+                    continue
+        except Exception as e:
+            return [{"error": f"Process error: {str(e)}"}]
         
         # Sort by CPU usage and return top N
         processes.sort(key=lambda x: x['cpu'], reverse=True)
