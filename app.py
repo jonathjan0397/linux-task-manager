@@ -592,7 +592,9 @@ class TaskManagerApp(App):
         color: #6ea8fe;
     }
     .table-panel {
-        height: 100%;
+        height: 1fr;
+        min-height: 12;
+        width: 100%;
         background: #111a2b;
         color: #d9e4f5;
         border: round #30415f;
