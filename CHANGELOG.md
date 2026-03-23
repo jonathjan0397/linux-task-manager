@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] - 2026-03-22
+
+### Added
+- Added monitor regression tests covering process sampling, connection formatting, and disk-health fallback behavior.
+
+### Fixed
+- Fixed the Processes view so CPU usage is primed and sorted consistently instead of staying at zero on first render.
+- Fixed the Connections view to fall back to `ss` parsing when `psutil` cannot expose sockets and to present a clean empty state when no sockets are visible.
+- Fixed the Disk Health view to degrade gracefully when `smartctl` is unavailable by still listing disks with explicit S.M.A.R.T. availability notes.
+
+### Changed
+- Refreshed the Textual UI with a denser layout, clearer panel summaries, and bounded sparkline history.
+- Tightened narrow-terminal behavior with shorter tab labels and a more compact disk-health table.
+- Reduced monitoring overhead by caching disk-health scans and recent connection results.
+
 ## [1.3.1] - 2026-03-22
 
 ### Fixed

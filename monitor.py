@@ -1,7 +1,11 @@
+import json
 import os
-import time
-import psutil
 import random
+import shutil
+import subprocess
+import time
+
+import psutil
 
 try:
     import pynvml
@@ -18,6 +22,13 @@ class Monitor:
         self._last_disk_time = time.time()
         self._nvidia_initialized = False
         self._proc_cache = {}
+        self._disk_health_cache = []
+        self._disk_health_cache_time = 0.0
+        self._connection_cache = []
+        self._connection_cache_time = 0.0
+
+        if not self.mock:
+            self._prime_process_cpu_counters()
 
         if not self.mock and HAS_PYNVML:
             try:
@@ -25,6 +36,228 @@ class Monitor:
                 self._nvidia_initialized = True
             except:
                 self._nvidia_initialized = False
+
+    def _prime_process_cpu_counters(self):
+        """Prime psutil CPU counters so the first visible sample has real data."""
+        for proc in psutil.process_iter():
+            try:
+                proc.cpu_percent(interval=None)
+                self._proc_cache[proc.pid] = proc
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+
+    def _format_addr(self, addr):
+        """Normalize psutil/netstat style addresses to a readable host:port form."""
+        if not addr:
+            return "-"
+
+        if hasattr(addr, "ip") and hasattr(addr, "port"):
+            host, port = addr.ip, addr.port
+        elif isinstance(addr, tuple):
+            if len(addr) >= 2:
+                host, port = addr[0], addr[1]
+            else:
+                return str(addr[0])
+        else:
+            return str(addr)
+
+        if ":" in str(host) and not str(host).startswith("["):
+            host = f"[{host}]"
+        return f"{host}:{port}"
+
+    def _read_sysfs_value(self, path):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return handle.read().strip()
+        except OSError:
+            return None
+
+    def _discover_block_devices(self):
+        devices = []
+        if not shutil.which("lsblk"):
+            return devices
+
+        try:
+            result = subprocess.run(
+                ["lsblk", "-J", "-d", "-o", "PATH,MODEL,TRAN,SIZE,ROTA,TYPE"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if result.returncode != 0:
+                return devices
+
+            payload = json.loads(result.stdout or "{}")
+            for entry in payload.get("blockdevices", []):
+                if entry.get("type") != "disk":
+                    continue
+                path = entry.get("path")
+                if not path:
+                    continue
+
+                name = os.path.basename(path)
+                temp = self._read_disk_temperature(name)
+                devices.append(
+                    {
+                        "device": path,
+                        "model": (entry.get("model") or "Unknown").strip() or "Unknown",
+                        "transport": entry.get("tran") or "unknown",
+                        "size": entry.get("size") or "N/A",
+                        "rotational": entry.get("rota"),
+                        "temp": temp,
+                    }
+                )
+        except (OSError, json.JSONDecodeError, subprocess.SubprocessError):
+            return []
+
+        return devices
+
+    def _read_disk_temperature(self, device_name):
+        hwmon_root = f"/sys/block/{device_name}/device/hwmon"
+        if os.path.isdir(hwmon_root):
+            try:
+                for hwmon_dir in os.listdir(hwmon_root):
+                    temp_raw = self._read_sysfs_value(os.path.join(hwmon_root, hwmon_dir, "temp1_input"))
+                    if temp_raw and temp_raw.isdigit():
+                        return f"{int(temp_raw) / 1000:.0f}°C"
+            except OSError:
+                pass
+
+        thermal_root = f"/sys/block/{device_name}/device"
+        for candidate in ("temperature", "temp"):
+            temp_raw = self._read_sysfs_value(os.path.join(thermal_root, candidate))
+            if temp_raw and temp_raw.isdigit():
+                value = int(temp_raw)
+                if value > 1000:
+                    value = value / 1000
+                return f"{value:.0f}°C"
+        return "N/A"
+
+    def _run_smartctl(self, device):
+        commands = [["smartctl", "-a", "-j", device]]
+        if hasattr(os, "getuid") and os.getuid() != 0:
+            commands.append(["sudo", "-n", "smartctl", "-a", "-j", device])
+
+        last_error = "smartctl unavailable"
+        for command in commands:
+            try:
+                proc = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=8,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                last_error = str(exc)
+                continue
+
+            if proc.returncode == 0 and proc.stdout:
+                try:
+                    return json.loads(proc.stdout), None
+                except json.JSONDecodeError as exc:
+                    last_error = f"invalid smartctl JSON: {exc}"
+                    continue
+
+            stderr = (proc.stderr or proc.stdout or "").strip()
+            if stderr:
+                lowered = stderr.lower()
+                if "sudo" in command[0]:
+                    last_error = "sudo permission required for S.M.A.R.T. data"
+                elif "permission" in lowered:
+                    last_error = "permission denied reading S.M.A.R.T. data"
+                else:
+                    last_error = stderr.splitlines()[-1]
+
+        return None, last_error
+
+    def _smart_status_from_data(self, data):
+        smart_passed = data.get("smart_status", {}).get("passed")
+        if smart_passed is True:
+            return "PASSED", False
+        if smart_passed is False:
+            return "FAILED", True
+        return "UNAVAILABLE", False
+
+    def _extract_reallocated_count(self, data):
+        ata_table = data.get("ata_smart_attributes", {}).get("table", [])
+        if isinstance(ata_table, list):
+            for attr in ata_table:
+                name = (attr.get("name") or "").lower()
+                if attr.get("id") == 5 or "reallocated" in name:
+                    return attr.get("raw", {}).get("value", 0)
+
+        nvme_log = data.get("nvme_smart_health_information_log", {})
+        for key in ("media_errors", "num_err_log_entries"):
+            if key in nvme_log:
+                return nvme_log.get(key, 0)
+        return 0
+
+    def _fallback_disk_entry(self, device, note):
+        media_type = "SSD" if device.get("rotational") == "0" else "HDD" if device.get("rotational") == "1" else device.get("transport", "unknown").upper()
+        return {
+            "device": device["device"],
+            "model": device["model"],
+            "status": "UNAVAILABLE",
+            "alert": False,
+            "temp": device.get("temp", "N/A"),
+            "power_on": "N/A",
+            "reallocated": "N/A",
+            "wear_level": "N/A",
+            "media": media_type,
+            "notes": note,
+        }
+
+    def _parse_ss_connections(self, limit):
+        if not shutil.which("ss"):
+            return []
+
+        try:
+            proc = subprocess.run(
+                ["ss", "-tunapH"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if proc.returncode != 0:
+                return []
+        except (OSError, subprocess.SubprocessError):
+            return []
+
+        connections = []
+        for raw_line in proc.stdout.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            parts = line.split(None, 5)
+            if len(parts) < 5:
+                continue
+
+            proto = parts[0]
+            state = parts[1]
+            local_addr = parts[4] if len(parts) > 4 else "-"
+            remote_addr = parts[5].split(" users:", 1)[0] if len(parts) > 5 else "-"
+            process_info = parts[5] if len(parts) > 5 else ""
+            pid = "-"
+            if "pid=" in process_info:
+                pid = process_info.split("pid=", 1)[1].split(",", 1)[0].rstrip(")")
+
+            connections.append(
+                {
+                    "proto": proto.upper(),
+                    "laddr": local_addr,
+                    "raddr": remote_addr if remote_addr else "-",
+                    "status": state,
+                    "pid": pid,
+                }
+            )
+
+        priority = {"ESTAB": 0, "ESTABLISHED": 0, "LISTEN": 1}
+        connections.sort(key=lambda conn: (priority.get(conn["status"], 2), conn["laddr"]))
+        return connections[:limit]
 
     def get_cpu_stats(self):
         """Returns per-core CPU usage."""
@@ -168,7 +401,9 @@ class Monitor:
                     "temp": "32°C",
                     "power_on": "4,520 hours",
                     "reallocated": 0,
-                    "wear_level": "98%"
+                    "wear_level": "98%",
+                    "media": "NVMe",
+                    "notes": "Healthy"
                 },
                 {
                     "device": "/dev/sda",
@@ -178,66 +413,59 @@ class Monitor:
                     "temp": "45°C",
                     "power_on": "12,150 hours",
                     "reallocated": 42,
-                    "wear_level": "85%"
+                    "wear_level": "85%",
+                    "media": "SSD",
+                    "notes": "Reallocated sectors detected"
                 }
             ]
 
+        now = time.time()
+        if self._disk_health_cache and now - self._disk_health_cache_time < 30:
+            return self._disk_health_cache
+
+        devices = self._discover_block_devices()
+        if not devices:
+            self._disk_health_cache = [{"error": "No block devices detected."}]
+            self._disk_health_cache_time = now
+            return self._disk_health_cache
+
         disks = []
-        try:
-            import subprocess
-            import json
-            import shutil
+        smartctl_available = shutil.which("smartctl") is not None
+        for device in devices:
+            if not smartctl_available:
+                disks.append(self._fallback_disk_entry(device, "Install smartmontools for S.M.A.R.T. details"))
+                continue
 
-            if not shutil.which("smartctl"):
-                return [{"error": "smartctl not installed. Please install smartmontools."}]
+            smart_data, smart_error = self._run_smartctl(device["device"])
+            if not smart_data:
+                disks.append(self._fallback_disk_entry(device, smart_error or "S.M.A.R.T. data unavailable"))
+                continue
 
-            # Check if we have sudo or if we are root
-            is_root = os.getuid() == 0 if hasattr(os, 'getuid') else False
-            cmd_prefix = [] if is_root else ['sudo', '-n']
-            
-            devices_proc = subprocess.run(cmd_prefix + ['smartctl', '--scan-open', '-j'], capture_output=True, text=True, timeout=5)
-            if devices_proc.returncode != 0:
-                return [{"error": "Permission denied. Disk health requires root/sudo privileges."}]
+            status, alert = self._smart_status_from_data(smart_data)
+            reallocated = self._extract_reallocated_count(smart_data)
+            temperature = smart_data.get("temperature", {}).get("current")
+            power_hours = smart_data.get("power_on_time", {}).get("hours")
+            media_type = smart_data.get("device", {}).get("type") or device.get("transport", "unknown").upper()
+            if str(media_type).lower() == "nvme":
+                media_type = "NVMe"
 
-            scan_data = json.loads(devices_proc.stdout)
-            for dev in scan_data.get('devices', []):
-                name = dev.get('name')
-                if not name: continue
+            disks.append(
+                {
+                    "device": device["device"],
+                    "model": smart_data.get("model_name") or smart_data.get("model_family") or device["model"],
+                    "status": status,
+                    "alert": alert or (isinstance(reallocated, int) and reallocated > 0),
+                    "temp": f"{temperature}°C" if temperature not in (None, "N/A") else device.get("temp", "N/A"),
+                    "power_on": f"{power_hours:,} hours" if isinstance(power_hours, int) else "N/A",
+                    "reallocated": reallocated,
+                    "wear_level": "N/A",
+                    "media": media_type,
+                    "notes": "Healthy" if status == "PASSED" and not reallocated else smart_error or "",
+                }
+            )
 
-                info_proc = subprocess.run(cmd_prefix + ['smartctl', '-a', '-j', name], capture_output=True, text=True, timeout=5)
-                if info_proc.returncode == 0:
-                    try:
-                        data = json.loads(info_proc.stdout)
-                    except json.JSONDecodeError:
-                        continue
-                    
-                    status_passed = data.get('smart_status', {}).get('passed', False)
-                    model = data.get('model_name', 'Unknown')
-                    temp = data.get('temperature', {}).get('current', 'N/A')
-                    power_on = data.get('power_on_time', {}).get('hours', 'N/A')
-                    
-                    reallocated = 0
-                    for table_key in ['ata_smart_attributes', 'nvme_smart_health_information_log']:
-                        table = data.get(table_key, {})
-                        if isinstance(table, dict) and 'table' in table:
-                            for attr in table['table']:
-                                if attr.get('id') == 5 or "reallocated" in attr.get('name', "").lower():
-                                    reallocated = attr.get('raw', {}).get('value', 0)
-                                    break
-
-                    disks.append({
-                        "device": name,
-                        "model": model,
-                        "status": "PASSED" if status_passed else "FAILED",
-                        "alert": not status_passed or reallocated > 0,
-                        "temp": f"{temp}°C" if temp != 'N/A' else 'N/A',
-                        "power_on": f"{power_on:,} hours" if power_on != 'N/A' else 'N/A',
-                        "reallocated": reallocated,
-                        "wear_level": "N/A"
-                    })
-        except Exception as e:
-            return [{"error": f"Error: {str(e)}"}]
-            
+        self._disk_health_cache = disks
+        self._disk_health_cache_time = now
         return disks
 
     def get_process_list(self, limit=15):
@@ -254,28 +482,27 @@ class Monitor:
             ]
 
         processes = []
-        # Update cache and remove dead processes
         try:
-            current_pids = set(psutil.pids())
-            for pid in list(self._proc_cache.keys()):
-                if pid not in current_pids:
-                    del self._proc_cache[pid]
-
-            for pid in current_pids:
+            current_pids = set()
+            for proc in psutil.process_iter():
+                pid = proc.pid
+                current_pids.add(pid)
                 try:
                     if pid not in self._proc_cache:
-                        self._proc_cache[pid] = psutil.Process(pid)
-                    
+                        self._proc_cache[pid] = proc
+                        proc.cpu_percent(interval=None)
+                        continue
+
                     proc = self._proc_cache[pid]
                     with proc.oneshot():
                         cpu = proc.cpu_percent(interval=None)
                         mem = proc.memory_percent()
                         name = proc.name()
-                    
+
                     processes.append({
                         "pid": pid,
                         "name": name,
-                        "cpu": cpu,
+                        "cpu": round(cpu, 1),
                         "mem": mem
                     })
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
@@ -284,11 +511,14 @@ class Monitor:
                     continue
                 except Exception:
                     continue
+
+            for pid in list(self._proc_cache.keys()):
+                if pid not in current_pids:
+                    del self._proc_cache[pid]
         except Exception as e:
             return [{"error": f"Process error: {str(e)}"}]
-        
-        # Sort by CPU usage and return top N
-        processes.sort(key=lambda x: x['cpu'], reverse=True)
+
+        processes.sort(key=lambda x: (x['cpu'], x['mem']), reverse=True)
         return processes[:limit]
 
     def get_network_connections(self, limit=25):
@@ -296,6 +526,7 @@ class Monitor:
         if self.mock:
             return [
                 {
+                    "proto": random.choice(["TCP", "UDP"]),
                     "laddr": f"127.0.0.1:{random.randint(1024, 65535)}",
                     "raddr": f"{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}:443",
                     "status": random.choice(["ESTABLISHED", "CLOSE_WAIT", "LISTEN"]),
@@ -303,24 +534,33 @@ class Monitor:
                 } for _ in range(limit)
             ]
 
+        now = time.time()
+        if self._connection_cache and now - self._connection_cache_time < 5:
+            return self._connection_cache[:limit]
+
         connections = []
         try:
-            # kind='inet' shows IPv4 and IPv6
             for conn in psutil.net_connections(kind='inet'):
-                laddr = f"{conn.laddr.ip}:{conn.laddr.port}" if conn.laddr else "-"
-                raddr = f"{conn.raddr.ip}:{conn.raddr.port}" if conn.raddr else "-"
                 connections.append({
-                    "laddr": laddr,
-                    "raddr": raddr,
+                    "proto": "TCP" if conn.type == 1 else "UDP",
+                    "laddr": self._format_addr(conn.laddr),
+                    "raddr": self._format_addr(conn.raddr),
                     "status": conn.status,
                     "pid": conn.pid or "-"
                 })
-        except (psutil.AccessDenied):
-            return [{"error": "Access Denied. Root/sudo required to see all connections."}]
+        except psutil.AccessDenied:
+            connections = self._parse_ss_connections(limit)
         except Exception as e:
             return [{"error": f"Error: {str(e)}"}]
-            
-        return connections[:limit]
+
+        if not connections:
+            connections = self._parse_ss_connections(limit)
+
+        priority = {"ESTABLISHED": 0, "ESTAB": 0, "LISTEN": 1}
+        connections.sort(key=lambda conn: (priority.get(conn["status"], 2), conn["laddr"]))
+        self._connection_cache = connections[:limit]
+        self._connection_cache_time = now
+        return self._connection_cache
 
     def get_gpu_stats(self):
         """Returns list of dicts with GPU usage info."""
