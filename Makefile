@@ -1,4 +1,4 @@
-.PHONY: run install help
+.PHONY: run install test help
 
 # Default target: run the app
 run:
@@ -10,9 +10,13 @@ install:
 	@chmod +x run.sh
 	@./run.sh --setup
 
+test:
+	@python3 -m unittest test_health.py test_procs.py
+
 help:
 	@echo "PyTask: Linux Task Manager"
 	@echo "Usage:"
 	@echo "  make        - Setup (if needed) and run the app"
 	@echo "  make run    - Same as above"
 	@echo "  make install - Only handle the virtual environment setup"
+	@echo "  make test   - Run the automated test suite"

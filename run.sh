@@ -24,5 +24,11 @@ else
     source .venv/bin/activate
 fi
 
+# Support setup-only mode used by the Makefile install target.
+if [ "$1" = "--setup" ]; then
+    echo "Environment setup complete."
+    exit 0
+fi
+
 # Run the application
 python3 app.py "$@"

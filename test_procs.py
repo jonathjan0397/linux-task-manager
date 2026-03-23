@@ -1,19 +1,26 @@
-import psutil
-import time
+import unittest
+
 from monitor import Monitor
 
-m = Monitor()
-print("Initial call (should be 0.0 for all):")
-procs = m.get_process_list()
-print(f"Count: {len(procs)}")
-for p in procs[:5]:
-    print(p)
 
-print("\nWaiting 1 second...")
-time.sleep(1)
+class ProcessTests(unittest.TestCase):
+    def test_mock_process_list_honors_limit_and_shape(self):
+        procs = Monitor(mock=True).get_process_list(limit=5)
 
-print("\nSecond call (should have real values):")
-procs = m.get_process_list()
-print(f"Count: {len(procs)}")
-for p in procs[:5]:
-    print(p)
+        self.assertEqual(len(procs), 5)
+        for proc in procs:
+            self.assertIn("pid", proc)
+            self.assertIn("name", proc)
+            self.assertIn("cpu", proc)
+            self.assertIn("mem", proc)
+
+    def test_real_process_list_returns_no_more_than_limit(self):
+        procs = Monitor().get_process_list(limit=3)
+
+        self.assertLessEqual(len(procs), 3)
+        for proc in procs:
+            self.assertTrue("error" in proc or {"pid", "name", "cpu", "mem"} <= proc.keys())
+
+
+if __name__ == "__main__":
+    unittest.main()

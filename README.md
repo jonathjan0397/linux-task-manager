@@ -60,6 +60,11 @@ If you are on a non-Linux system (like Windows or macOS) or want to test the UI 
 python app.py --mock
 ```
 
+Run the automated checks with:
+```bash
+make test
+```
+
 ## License
 
 This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.

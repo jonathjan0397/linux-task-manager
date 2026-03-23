@@ -1,7 +1,22 @@
-from monitor import Monitor
-import json
+import unittest
 
-m = Monitor()
-health = m.get_disk_health()
-print(f"Disk Health Data (count: {len(health)}):")
-print(json.dumps(health, indent=2))
+from monitor import Monitor
+
+
+class DiskHealthTests(unittest.TestCase):
+    def test_mock_disk_health_returns_expected_shape(self):
+        health = Monitor(mock=True).get_disk_health()
+
+        self.assertGreaterEqual(len(health), 1)
+        for disk in health:
+            self.assertIn("device", disk)
+            self.assertIn("model", disk)
+            self.assertIn("status", disk)
+            self.assertIn("alert", disk)
+            self.assertIn("temp", disk)
+            self.assertIn("power_on", disk)
+            self.assertIn("reallocated", disk)
+
+
+if __name__ == "__main__":
+    unittest.main()

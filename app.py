@@ -8,9 +8,10 @@
 # ///
 
 import sys
+from rich.table import Table
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Static, ProgressBar, Sparkline, Label, DataTable, TabbedContent, TabPane, Digits, ListView, ListItem
 from textual.containers import Container, Vertical, Horizontal, Grid
+from textual.widgets import Header, Footer, Static, ProgressBar, Sparkline, Label, TabbedContent, TabPane, Digits, ListView, ListItem
 from monitor import Monitor
 
 
@@ -27,6 +28,22 @@ def truncate_text(value, limit):
     if limit <= 1:
         return text[:limit]
     return f"{text[:limit - 1]}…"
+
+
+def build_rich_table(columns, rows):
+    table = Table(
+        expand=True,
+        box=None,
+        show_header=True,
+        show_edge=False,
+        pad_edge=False,
+        header_style="bold #f5f7fb",
+    )
+    for column in columns:
+        table.add_column(column, overflow="fold")
+    for row in rows:
+        table.add_row(*[str(cell) for cell in row])
+    return table
 
 def get_icon(icon_type: str) -> str:
     """Returns an icon with a text fallback for compatibility."""
@@ -181,42 +198,34 @@ class ConnectionsWidget(Static):
         yield Label("Active Network Connections", classes="section-title")
         self.summary = Label("Waiting for connection data...", classes="panel-summary")
         yield self.summary
-        self.table = DataTable()
-        self.table.add_columns("Proto", "Local Address", "Remote Address", "Status", "PID")
+        self.table = Static(classes="table-panel")
         yield self.table
 
     def update_stats(self, connections):
-        self.table.clear()
         if connections and isinstance(connections[0], dict) and "error" in connections[0]:
             self.summary.update("[red]Connection discovery failed[/red]")
-            self.table.add_row("-", f"[red]{connections[0]['error']}[/]", "-", "-", "-")
+            self.table.update(f"[red]{connections[0]['error']}[/red]")
             return
 
         if not connections:
             self.summary.update("[dim]No active or listening connections detected.[/dim]")
-            self.table.add_row("-", "No connections detected", "-", "-", "-")
+            self.table.update("[dim]No connections detected.[/dim]")
             return
 
         established = sum(1 for conn in connections if conn["status"] in {"ESTABLISHED", "ESTAB"})
         listening = sum(1 for conn in connections if conn["status"] == "LISTEN")
         self.summary.update(f"{len(connections)} visible sockets | {established} established | {listening} listening")
 
+        rows = []
         for conn in connections:
-            status = conn['status']
-            if status in {'ESTABLISHED', 'ESTAB'}:
-                status_display = f"[green]{status}[/]"
-            elif status == 'LISTEN':
-                status_display = f"[yellow]{status}[/]"
-            else:
-                status_display = f"[cyan]{status}[/]"
-            
-            self.table.add_row(
+            rows.append((
                 conn.get('proto', '-'),
                 conn['laddr'],
                 conn['raddr'],
-                status_display,
+                conn['status'],
                 str(conn['pid'])
-            )
+            ))
+        self.table.update(build_rich_table(("Proto", "Local Address", "Remote Address", "Status", "PID"), rows))
 
 class DiskWidget(Static):
     def compose(self) -> ComposeResult:
@@ -247,56 +256,46 @@ class DiskHealthWidget(Static):
         yield Label("Disk S.M.A.R.T. Health Assessment", classes="section-title")
         self.summary = Label("Scanning disks...", classes="panel-summary")
         yield self.summary
-        self.table = DataTable()
+        self.table = Static(classes="table-panel")
         yield self.table
 
-    def on_mount(self) -> None:
-        self.table.add_columns(" ", "Dev", "Model", "Type", "Status", "Temp", "Hours", "Realloc", "Note")
-
     def update_stats(self, disks):
-        self.table.clear()
-        
-        # Ensure columns exist (safety check)
-        if not self.table.columns:
-            self.table.add_columns(" ", "Dev", "Model", "Type", "Status", "Temp", "Hours", "Realloc", "Note")
-
         if not disks:
             self.summary.update("[dim]No disks detected.[/dim]")
-            self.table.add_row("", "No disks detected.", "-", "-", "-", "-", "-", "-", "-")
+            self.table.update("[dim]No disks detected.[/dim]")
             return
 
         if disks and isinstance(disks[0], dict) and "error" in disks[0]:
             self.summary.update("[red]Disk health scan failed[/red]")
-            self.table.add_row("!", f"[red]{disks[0]['error']}[/]", "-", "-", "-", "-", "-", "-", "-")
+            self.table.update(f"[red]{disks[0]['error']}[/red]")
             return
 
         passing = sum(1 for disk in disks if disk["status"] == "PASSED")
         degraded = sum(1 for disk in disks if disk.get("alert"))
         self.summary.update(f"{len(disks)} disks | {passing} healthy | {degraded} needing attention")
 
+        rows = []
         for disk in disks:
             if disk['status'] == "PASSED":
-                status_style = "[green]"
                 icon = get_icon("pass")
             elif disk['status'] == "UNAVAILABLE":
-                status_style = "[yellow]"
                 icon = get_icon("warn")
             else:
-                status_style = "[bold red]"
                 icon = get_icon("alert") if disk.get('alert') else get_icon("warn")
 
             reallocated = disk.get('reallocated', 'N/A')
-            self.table.add_row(
+            rows.append((
                 icon,
                 truncate_text(disk['device'], 12),
                 truncate_text(disk['model'], 22),
                 truncate_text(disk.get('media', 'N/A'), 6),
-                f"{status_style}{disk['status']}[/]",
+                disk['status'],
                 disk['temp'],
                 truncate_text(disk['power_on'], 10),
-                f"[bold red]{reallocated}[/]" if isinstance(reallocated, int) and reallocated > 0 else str(reallocated),
+                str(reallocated),
                 truncate_text(disk.get('notes', '-'), 22)
-            )
+            ))
+        self.table.update(build_rich_table((" ", "Dev", "Model", "Type", "Status", "Temp", "Hours", "Realloc", "Note"), rows))
 
 class GPUCard(Vertical):
     def __init__(self, name: str):
@@ -356,50 +355,32 @@ class ProcessWidget(Static):
         yield Label("Top System Processes", classes="section-title")
         self.summary = Label("Sampling processes...", classes="panel-summary")
         yield self.summary
-        self.table = DataTable()
+        self.table = Static(classes="table-panel")
         yield self.table
 
-    def on_mount(self) -> None:
-        self.table.add_columns("PID", "Name", "CPU%", "MEM%")
-
     def update_stats(self, processes):
-        self.table.clear()
-        
         if processes and isinstance(processes[0], dict) and "error" in processes[0]:
-            # If columns were cleared (shouldn't happen with .clear()), add them back
-            if not self.table.columns:
-                self.table.add_columns("PID", "Name", "CPU%", "MEM%")
             self.summary.update("[red]Process sampling failed[/red]")
-            self.table.add_row("-", f"[red]{processes[0]['error']}[/]", "-", "-")
+            self.table.update(f"[red]{processes[0]['error']}[/red]")
             return
 
         if not processes:
-            if not self.table.columns:
-                self.table.add_columns("PID", "Name", "CPU%", "MEM%")
             self.summary.update("[dim]No runnable processes found.[/dim]")
-            self.table.add_row("-", "No processes found", "-", "-")
+            self.table.update("[dim]No processes found.[/dim]")
             return
 
         busiest = processes[0]
         self.summary.update(f"{len(processes)} processes shown | top CPU: {busiest['name']} ({busiest['cpu']:.1f}%)")
 
+        rows = []
         for proc in processes:
-            cpu = proc['cpu']
-            # Divide by CPU count for actual per-core percentage (psutil logic on some OSs)
-            # But let's keep it simple for now as per monitor output
-            if cpu > 50:
-                cpu_display = f"[bold red]{cpu}%[/]"
-            elif cpu > 20:
-                cpu_display = f"[yellow]{cpu}%[/]"
-            else:
-                cpu_display = f"{cpu}%"
-            
-            self.table.add_row(
+            rows.append((
                 str(proc['pid']),
-                f"[bold]{proc['name']}[/]",
-                cpu_display,
+                truncate_text(proc['name'], 24),
+                f"{proc['cpu']:.1f}%",
                 f"{proc['mem']:.1f}%"
-            )
+            ))
+        self.table.update(build_rich_table(("PID", "Name", "CPU%", "MEM%"), rows))
 
 class LogViewerWidget(Static):
     def __init__(self, monitor):
@@ -610,19 +591,13 @@ class TaskManagerApp(App):
         height: 3;
         color: #6ea8fe;
     }
-    DataTable {
+    .table-panel {
         height: 100%;
         background: #111a2b;
         color: #d9e4f5;
         border: round #30415f;
-    }
-    DataTable > .datatable--header {
-        background: #1c2a42;
-        color: #f5f7fb;
-        text-style: bold;
-    }
-    DataTable > .datatable--cursor {
-        background: #263754;
+        padding: 0 1;
+        overflow: auto;
     }
     #log-sidebar {
         width: 25;
@@ -669,21 +644,24 @@ class TaskManagerApp(App):
         super().__init__()
         self.monitor = Monitor(mock=mock)
 
-    def action_next_tab(self) -> None:
+    def _switch_tab_relative(self, step: int) -> None:
         tc = self.query_one(TabbedContent)
-        panes = list(tc.query(TabPane))
+        panes = [pane for pane in tc.query(TabPane) if pane.id]
         if not panes:
             return
-        current = next((i for i, pane in enumerate(panes) if pane.id == tc.active), 0)
-        tc.active = panes[(current + 1) % len(panes)].id
+
+        active_index = next(
+            (index for index, pane in enumerate(panes) if pane.id == tc.active),
+            0,
+        )
+        next_index = (active_index + step) % len(panes)
+        tc.active = panes[next_index].id
+
+    def action_next_tab(self) -> None:
+        self._switch_tab_relative(1)
 
     def action_previous_tab(self) -> None:
-        tc = self.query_one(TabbedContent)
-        panes = list(tc.query(TabPane))
-        if not panes:
-            return
-        current = next((i for i, pane in enumerate(panes) if pane.id == tc.active), 0)
-        tc.active = panes[(current - 1) % len(panes)].id
+        self._switch_tab_relative(-1)
 
     def action_switch_tab(self, index: int) -> None:
         tc = self.query_one(TabbedContent)
